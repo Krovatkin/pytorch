@@ -1,7 +1,7 @@
 #include <torch/csrc/jit/passes/shape_analysis.h>
 
-#include <torch/csrc/jit/argument_spec.h>
 #include <c10/util/Exception.h>
+#include <torch/csrc/jit/argument_spec.h>
 #include <torch/csrc/jit/constants.h>
 #include <torch/csrc/jit/ir.h>
 #include <torch/csrc/jit/operator.h>
@@ -984,9 +984,11 @@ class ShapePropagator {
         },
         [](Node* node) -> type_vec_t {
           if (auto dim = node->get<std::vector<int64_t>>(attr::dim)) {
-            std::set<int64_t> unique_dims {dim->begin(), dim->end()};
+            std::set<int64_t> unique_dims{dim->begin(), dim->end()};
             return multidim_reduce_with_postprocess(
-                node, /*num_reduce_dim=*/unique_dims.size(), /*integer_upcast=*/true);
+                node,
+                /*num_reduce_dim=*/unique_dims.size(),
+                /*integer_upcast=*/true);
           }
           return {};
         }};
