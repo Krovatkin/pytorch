@@ -123,8 +123,6 @@ void PeepholeOptimizeImpl(Block* block, bool addmm_fusion_enabled) {
           }
         }
       }
-      // TODO: this doesn't work with Scalar-Tensor ops! We should canonicalize
-      // those
     } else if (
         node->matches(
             "aten::mul(Tensor self, Scalar other) -> Tensor",

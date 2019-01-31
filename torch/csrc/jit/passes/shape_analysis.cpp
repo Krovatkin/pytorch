@@ -984,9 +984,9 @@ class ShapePropagator {
         },
         [](Node* node) -> type_vec_t {
           if (auto dim = node->get<std::vector<int64_t>>(attr::dim)) {
-            // TODO: can dim contain duplicates?
+            std::set<int64_t> unique_dims {dim->begin(), dim->end()};
             return multidim_reduce_with_postprocess(
-                node, /*num_reduce_dim=*/dim->size(), /*integer_upcast=*/true);
+                node, /*num_reduce_dim=*/unique_dims.size(), /*integer_upcast=*/true);
           }
           return {};
         }};
