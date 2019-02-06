@@ -17,6 +17,7 @@
 #include <ATen/core/thread_pool.h>
 #include <c10/util/SmallVector.h>
 
+#include <algorithm>
 #include <exception>
 #include <iostream>
 #include <limits>
@@ -1003,6 +1004,75 @@ Operation listAppend(const Node* node) {
   };
 }
 
+template <typename TList, typename TElement>
+Operation listPop(const Node* node) {
+  return [](Stack& stack) {
+    TList list;
+    int64_t idx;
+    pop(stack, list, idx);
+
+    auto& vec = list->elements();
+    if (idx >= vec.size()) {
+      throw std::out_of_range("list index out of range");
+    }
+    TElement el = vec.at(idx);
+    vec.erase(vec.begin() + idx);
+    push(stack, el);
+
+    return 0;
+  };
+}
+
+template <typename TList, typename TElement>
+Operation listClear(const Node* node) {
+  return [](Stack& stack) {
+    TList list;
+    pop(stack, list);
+
+    list->elements().clear();
+    return 0;
+  };
+}
+
+template <typename TList, typename TElement>
+Operation listReverse(const Node* node) {
+  return [](Stack& stack) {
+    TList list;
+    pop(stack, list);
+
+    auto& vec = list->elements();
+    std::reverse(vec.begin(), vec.end());
+    return 0;
+  };
+}
+
+template <typename TList, typename TElement>
+Operation listExtend(const Node* node) {
+  return [](Stack& stack) {
+    TList a;
+    TList b;
+    pop(stack, a, b);
+
+    auto& vec_a = a->elements();
+    const auto& vec_b = b->elements();
+    vec_a.insert(vec_a.end(), vec_b.cbegin(), vec_b.cend());
+    return 0;
+  };
+}
+
+template <typename TList, typename TElement>
+Operation listCopy(const Node* node) {
+  return [](Stack& stack) {
+    TList list;
+    pop(stack, list);
+
+    const auto& vec = list->elements();
+    std::vector<TElement> out(vec.cbegin(), vec.cend());
+    push(stack, out);
+    return 0;
+  };
+}
+
 template <typename T>
 Operation listSelect(const Node* node) {
   return [=](Stack& stack) {
@@ -1287,6 +1357,21 @@ RegisterOperators reg2({
           "(c) el) -> " decl_type "[](a!)",                                 \
           listAppend<Shared<c_type>, c_type::ElemType>),                    \
       Operator(                                                             \
+          "aten::clear(" decl_type "[](a!) self) -> ()",                    \
+          listClear<Shared<c_type>, c_type::ElemType>),                     \
+      Operator(                                                             \
+          "aten::reverse(" decl_type "[](a!) self) -> ()",                  \
+          listReverse<Shared<c_type>, c_type::ElemType>),                   \
+      Operator(                                                             \
+          "aten::extend(" decl_type "[](a!) self, " decl_type               \
+          " [](b) other) -> ()",                                            \
+          listExtend<Shared<c_type>, c_type::ElemType>),                    \
+      Operator(                                                             \
+          "aten::copy(" decl_type                                           \
+          "[](a) self)"                                                     \
+          " -> " decl_type "[](b!)",                                        \
+          listCopy<Shared<c_type>, c_type::ElemType>),                      \
+      Operator(                                                             \
           "aten::_set_item(" decl_type "[](a!) l, int idx, " decl_type      \
           " el) -> " decl_type "[](a!)",                                    \
           listSetItem<Shared<c_type>, c_type::ElemType>)
@@ -1302,6 +1387,21 @@ RegisterOperators reg2({
           "aten::append(" decl_type "[](a!) self, " decl_type          \
           " el) -> " decl_type "[](a!)",                               \
           listAppend<Shared<c_type>, c_type::ElemType>),               \
+      Operator(                                                        \
+          "aten::clear(" decl_type "[](a!) self) -> ()",               \
+          listClear<Shared<c_type>, c_type::ElemType>),                \
+      Operator(                                                        \
+          "aten::extend(" decl_type "[](a!) self, " decl_type          \
+          " [](b) other) -> ()",                                       \
+          listExtend<Shared<c_type>, c_type::ElemType>),               \
+      Operator(                                                        \
+          "aten::copy(" decl_type                                      \
+          "[](a) self)"                                                \
+          " -> " decl_type "[](b!)",                                   \
+          listCopy<Shared<c_type>, c_type::ElemType>),                 \
+      Operator(                                                        \
+          "aten::reverse(" decl_type "[](a!) self) -> ()",             \
+          listReverse<Shared<c_type>, c_type::ElemType>),              \
       Operator(                                                        \
           "aten::_set_item(" decl_type "[](a!) l, int idx, " decl_type \
           " el) -> " decl_type "[](a!)",                               \

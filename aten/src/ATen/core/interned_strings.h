@@ -87,6 +87,10 @@ namespace c10 {
   _(aten, __is__)                  \
   _(aten, __isnot__)               \
   _(aten, copy_)                   \
+  _(aten, clear)                   \
+  _(aten, reverse)                 \
+  _(aten, extend)                  \
+  _(aten, copy)                    \
   _(aten, _set_item)               \
   _(aten, index_put_)              \
   _(aten, device)                  \
