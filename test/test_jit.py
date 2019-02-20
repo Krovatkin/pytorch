@@ -4019,6 +4019,46 @@ a")
 
         self.assertEqual(foo(), [1, 2, 3, 4])
 
+    def test_list_insert_immutable(self):
+
+        def test_insert(l, i, v):
+            # type: (List[int], int, int) -> List[int]
+
+            l.insert(i, v)
+            return l
+
+        # checkScript doesn't handle side effects very well
+        source = textwrap.dedent(inspect.getsource(test_insert))
+        cu = torch.jit.CompilationUnit(source, True, 0)
+        compiled_test_insert = getattr(cu, "test_insert")
+
+        for i in [-100, 0, 100]:
+            self.assertEqual(test_insert([], i, 2), compiled_test_insert([], i, 2))
+
+        for i in range(-3, 4, 1):
+            self.assertEqual(test_insert([3, 4], i, 2), compiled_test_insert([3, 4], i, 2))
+
+    def test_list_insert_mutable(self):
+
+        def test_insert(l, i, v):
+            # type: (List[Tensor], int, Tensor) -> List[Tensor]
+
+            l.insert(i, v)
+            return l
+
+        # checkScript doesn't handle side effects very well
+        source = textwrap.dedent(inspect.getsource(test_insert))
+        cu = torch.jit.CompilationUnit(source, True, 0)
+        compiled_test_insert = getattr(cu, "test_insert")
+
+        tenz_value = torch.rand(2)
+        for i in [-100, 0, 100]:
+            self.assertEqual(test_insert([], i, tenz_value), compiled_test_insert([], i, tenz_value))
+
+        tenz = [torch.rand(2), torch.rand(2)]
+        for i in range(-3, 4, 1):
+            self.assertEqual(test_insert(tenz[:], i, tenz_value), compiled_test_insert(tenz[:], i, tenz_value))
+
     def test_mutable_list_pop_empty(self):
         @torch.jit.script
         def test_pop_empty():
