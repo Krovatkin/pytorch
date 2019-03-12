@@ -176,6 +176,13 @@ struct MethodValue : public SugaredValue {
         caller.emit_call_to(loc, method, inputs, attributes));
   }
 
+  Method& getMethod() {
+    return method;
+  }
+  std::shared_ptr<SugaredValue> self() {
+    return self_;
+  }
+
  private:
   std::shared_ptr<Module> module;
   Method& method;

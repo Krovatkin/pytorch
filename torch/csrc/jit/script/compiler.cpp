@@ -1,5 +1,6 @@
 #include <torch/csrc/jit/script/compiler.h>
 #include <c10/util/Exception.h>
+#include <c10/util/StringUtil.h>
 #include <torch/csrc/jit/hooks_for_testing.h>
 #include <torch/csrc/jit/interpreter.h>
 #include <torch/csrc/jit/ir.h>
@@ -533,6 +534,7 @@ struct to_ir {
     }
 
     method.setSchema(emitDef(def, self, graph->block()));
+    runInline(graph->block());
     runCleanupPasses(graph);
   }
 
@@ -568,6 +570,46 @@ struct to_ir {
     // remove any uses of tuples that we inserted that are not needed
     LowerSimpleTuples(to_clean);
     ConstantPooling(to_clean);
+  }
+
+  void runInline(Block* block) {
+    Node* cur = block->nodes().front();
+    Node* end = block->return_node();
+
+    while (cur != end) {
+      auto next = cur->next();
+      if (cur->kind() == prim::CallModuleFunction) {
+        AT_ASSERT(cur->inputs().at(0)->node()->kind() == prim::Constant);
+        auto function_constant = cur->inputs().at(0)->node();
+        const auto& fqfn = function_constant->s(attr::function_name);
+        auto mv = resolveFullyQualifiedFunctionName(fqfn, fakeRange());
+        auto& method = mv->getMethod();
+
+        auto old_output = cur->outputs();
+        // slice function ptr value
+        auto inputs = cur->inputs().slice(1);
+        WithInsertPoint guard(next);
+        auto new_output =
+            inlineCallTo(*cur->owningGraph(), *method.graph().get(), inputs)
+                .at(0);
+        if (old_output.at(0)->hasUniqueName()) {
+          auto name = old_output.at(0)->uniqueName();
+          new_output->setUniqueName(name);
+        }
+
+        old_output.at(0)->replaceAllUsesWith(new_output);
+        next = cur->next();
+        cur->destroy();
+      } else if (cur->hasAttribute(attr::Subgraph)) {
+        auto fg = cur->g(attr::Subgraph);
+        runInline(fg->block());
+      } else {
+        for (auto b : cur->blocks()) {
+          runInline(b);
+        }
+      }
+      cur = next;
+    }
   }
 
   FunctionSchema emitDef(
@@ -1984,6 +2026,66 @@ struct to_ir {
     } else {
       auto inputs = getNamedValues(apply.inputs(), true);
       auto attributes = emitAttributes(apply.attributes());
+
+      auto r =
+          getFullyQualifiedNameAndSchema(apply.callee(), inputs, attributes);
+      auto mv = r.first;
+      auto fqfn = r.second;
+
+      if (mv) {
+        auto mf = c10::ivalue::ModuleFunction::create(fqfn);
+        auto& schema = mv->getMethod().getSchema();
+
+        if (auto classType =
+                std::dynamic_pointer_cast<SimpleValue>(mv->self())) {
+          inputs.insert(inputs.begin(), classType->getValue());
+        }
+
+        std::stringstream failure_messages;
+        auto matched_schema = tryMatchSchema(
+            schema,
+            apply.range(),
+            *graph.get(),
+            c10::nullopt,
+            inputs,
+            attributes,
+            failure_messages,
+            /*conv_tensors_to_nums=*/true);
+
+        if (!matched_schema) {
+          throw ErrorReport(apply.range())
+              << " mismatch between arguments and parameters "
+              << failure_messages.str();
+        }
+
+        if (matched_schema.value().return_types.size() > 1) {
+          throw ErrorReport(loc) << "multiple returns aren't yet supported";
+        }
+
+        for (auto member : mv->getMethod().initial_ivalues()) {
+          matched_schema->inputs.push_back(method.get_or_add_parameter(member));
+        }
+
+        auto fun_constant =
+            graph->insertConstant(mf, FunctionType::create(), apply.range());
+        auto call_node = graph->insertNode(create(
+            prim::CallModuleFunction, apply.range(), schema.returns().size()));
+
+        // add fun_constant
+        call_node->addInput(fun_constant);
+        auto& matched_inputs = matched_schema.value().inputs;
+        for (auto input : matched_inputs) {
+          call_node->addInput(input);
+        }
+
+        call_node->eraseOutput(0);
+        for (const auto& result : schema.returns()) {
+          call_node->addOutput()->setType(result.type());
+        }
+
+        return std::make_shared<SimpleValue>(call_node->output());
+      }
+
       return sv->call(loc, method, inputs, attributes, n_binders);
     }
   }
@@ -2049,6 +2151,78 @@ struct to_ir {
     }
     throw std::runtime_error(
         "reverseComparision: unsupported NodeKind. File a bug");
+  }
+
+  std::shared_ptr<MethodValue> resolveFullyQualifiedFunctionName(
+      const std::string& fqfn,
+      const SourceRange& range) {
+    auto tokens = c10::Split(fqfn, ".");
+    AT_ASSERT(tokens.size() > 0);
+    auto prefix = environment_stack->getSugaredVar(tokens.at(0), range);
+
+    if (tokens.size() > 1) {
+      for (size_t i = 1; i < tokens.size(); i++) {
+        prefix = prefix->attr(range, method, tokens[i]);
+      }
+    }
+
+    auto mv = std::dynamic_pointer_cast<MethodValue>(prefix);
+    AT_ASSERT(mv);
+    return mv;
+  }
+
+  std::pair<std::shared_ptr<MethodValue>, std::string>
+  getFullyQualifiedNameAndSchema(
+      const Expr& expr,
+      const std::vector<NamedValue>& inputs,
+      const std::vector<NamedValue>& attributes) {
+    std::vector<std::string> names;
+    auto suv = getFullyQualifiedName(expr, names);
+    if (!suv) {
+      return std::make_pair(std::shared_ptr<MethodValue>{}, "");
+    }
+    auto fqfn = c10::Join(".", names);
+    if (auto mv = std::dynamic_pointer_cast<MethodValue>(suv)) {
+      auto& method = mv->getMethod();
+      try {
+        method.ensure_defined();
+      } catch (std::exception&) {
+        throw ErrorReport(expr.range())
+            << " method '" << method.name()
+            << "' is called recursively involving this call site. Recursive calls are not supported";
+      }
+      return std::make_pair(std::shared_ptr<MethodValue>{}, fqfn);
+
+    } else {
+      return std::make_pair(std::shared_ptr<MethodValue>{}, fqfn);
+    }
+
+    AT_ASSERT(false);
+  }
+
+  std::shared_ptr<SugaredValue> getFullyQualifiedName(
+      const Expr& expr,
+      std::vector<std::string>& names) {
+    std::shared_ptr<SugaredValue> prefix = nullptr;
+    switch (expr.kind()) {
+      case TK_VAR: {
+        Var var(expr);
+        names.push_back(var.name().name());
+        return environment_stack->getSugaredVar(var.name(), true);
+        break;
+      }
+      case '.': {
+        auto select = Select(expr);
+        auto suv = getFullyQualifiedName(select.value(), names);
+        names.push_back(select.selector().name());
+        return (suv)
+            ? suv->attr(select.range(), method, select.selector().name())
+            : nullptr;
+        break;
+      }
+      default:
+        return std::shared_ptr<SugaredValue>{};
+    }
   }
 
   // any expression that can produce a SugaredValue is handled here

@@ -17,24 +17,25 @@
 namespace c10 {
 
 #define C10_FORALL_TYPES(_) \
-_(TensorType) \
-_(DimensionedTensorType) \
-_(CompleteTensorType) \
-_(UndefinedTensorType) \
-_(TupleType) \
-_(ListType) \
-_(DictType) \
-_(NumberType) \
-_(FloatType) \
-_(FutureType) \
-_(IntType) \
-_(NoneType) \
-_(StringType) \
-_(GeneratorType) \
-_(BoolType) \
-_(OptionalType) \
-_(VarType) \
-_(DeviceObjType) \
+  _(TensorType)             \
+  _(DimensionedTensorType)  \
+  _(CompleteTensorType)     \
+  _(UndefinedTensorType)    \
+  _(TupleType)              \
+  _(ListType)               \
+  _(DictType)               \
+  _(NumberType)             \
+  _(FloatType)              \
+  _(FutureType)             \
+  _(IntType)                \
+  _(NoneType)               \
+  _(StringType)             \
+  _(GeneratorType)          \
+  _(BoolType)               \
+  _(OptionalType)           \
+  _(VarType)                \
+  _(DeviceObjType)          \
+  _(FunctionType)
 
 enum class TypeKind {
 #define DEFINE_TYPE(T) T,
@@ -871,6 +872,31 @@ struct CAFFE2_API StringType : public Type {
 private:
   StringType()
   : Type(TypeKind::StringType) {}
+};
+
+struct FunctionType;
+using FunctionTypePtr = std::shared_ptr<FunctionType>;
+// This type represents a Python Function
+struct CAFFE2_API FunctionType : public Type {
+  static FunctionTypePtr create() {
+    return FunctionTypePtr(new FunctionType()); // NOLINT(modernize-make-shared)
+  }
+  DEFINE_IS_SUBCLASS(FunctionType);
+  bool operator==(const Type& rhs) const override {
+    return rhs.kind() == kind();
+  }
+  std::string str() const override {
+    return "Function";
+  }
+  std::string python_str() const override {
+    throw std::runtime_error("Not yet implemented");
+  }
+  static const TypeKind Kind = TypeKind::FunctionType;
+  // global singleton
+  static FunctionTypePtr get();
+
+ private:
+  FunctionType() : Type(TypeKind::FunctionType) {}
 };
 
 struct NoneType;

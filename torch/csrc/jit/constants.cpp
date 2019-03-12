@@ -63,6 +63,10 @@ Value* insertConstant(
     ss << val.toDevice();
     n->s_(attr::value, ss.str());
     n->output()->setType(DeviceObjType::get());
+  } else if (val.isModuleFunction()) {
+    auto mf = val.toModuleFunction();
+    n->s_(attr::function_name, mf->name());
+    n->output()->setType(FunctionType::create());
   } else if (val.isNone()) {
     n->destroy();
     n = g.create(prim::None);

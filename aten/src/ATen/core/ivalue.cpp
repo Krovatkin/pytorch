@@ -1,5 +1,6 @@
 #include <ATen/core/ivalue.h>
 #include <ATen/core/Formatting.h>
+#include <c10/util/StringUtil.h>
 #include <cmath>
 
 namespace c10 {
@@ -10,7 +11,19 @@ CAFFE2_API c10::intrusive_ptr<ConstantString> ConstantString::create(
   return c10::make_intrusive<ConstantString>(std::move(str_));
 }
 
+ModuleFunction::ModuleFunction(const std::string& name) : name_(name){};
+
+CAFFE2_API c10::intrusive_ptr<ModuleFunction> ModuleFunction::create(
+    const std::string& name) {
+  return c10::make_intrusive<ModuleFunction>(name);
+}
+
 } // namespace ivalue
+
+c10::intrusive_ptr<ivalue::ModuleFunction> IValue::toModuleFunction() const {
+  AT_ASSERT(isModuleFunction());
+  return toIntrusivePtr<ivalue::ModuleFunction>();
+}
 
 namespace {
 
@@ -93,6 +106,11 @@ std::ostream& operator<<(std::ostream & out, const IValue & v) {
       return out << v.toDevice();
     case IValue::Tag::GenericDict:
       return printDict(out, v.toGenericDict());
+    case IValue::Tag::ModuleFunction: {
+      auto mf = v.toModuleFunction();
+      auto fun_name = mf->name();
+      return out << "ModuleFunction (name: " << fun_name << ")";
+    }
   }
   AT_ERROR("Tag not found\n");
 }

@@ -818,6 +818,7 @@ bool Node::hasSideEffects() const {
     case prim::Print:
     case prim::RaiseException:
     case aten::warn:
+    case prim::CallModuleFunction:
       return true;
   }
   return false;
@@ -1131,12 +1132,6 @@ void Node::removeFromList() {
   next->prev() = prev;
   this->next() = nullptr;
   this->prev() = nullptr;
-}
-
-inline const SourceRange& fakeRange() {
-  static SourceRange range(
-      std::make_shared<std::string>("<internally-created-node>"), 0, 1);
-  return range;
 }
 
 Value* Graph::insert(

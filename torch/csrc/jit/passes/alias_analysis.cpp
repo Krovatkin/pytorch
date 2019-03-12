@@ -304,6 +304,11 @@ void AliasDb::analyzeImpl(Node* node) {
       return analyzeChunk(node);
     case prim::BroadcastingChunk:
       return analyzeBroadcastingChunk(node);
+    case prim::CallModuleFunction: {
+      throw script::ErrorReport(node->getSourceLocation())
+          << "Alias summaries are required to support this feature.\n"
+          << "Node: " << *node << "\n";
+    }
     case aten::add:
     case aten::sub:
     case aten::mul:

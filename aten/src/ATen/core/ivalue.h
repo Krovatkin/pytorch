@@ -38,6 +38,24 @@ struct CAFFE2_API ConstantString final : c10::intrusive_ptr_target {
       const ConstantString& v);
 };
 
+// module function
+struct CAFFE2_API ModuleFunction final : c10::intrusive_ptr_target {
+ private:
+  const std::string name_;
+
+ public:
+  ModuleFunction(const std::string& name);
+
+  static c10::intrusive_ptr<ModuleFunction> create(const std::string& name);
+  const std::string& name() const {
+    return name_;
+  }
+
+  CAFFE2_API friend std::ostream& operator<<(
+      std::ostream& out,
+      const ModuleFunction& v);
+};
+
 template <typename Elem>
 struct CAFFE2_API List : c10::intrusive_ptr_target {
  private:
@@ -129,22 +147,23 @@ using GenericDict = Dict<IValue, IValue>;
 // retain/release calls.
 
 #define TORCH_FORALL_TAGS(_) \
-  _(None) \
-  _(Tensor) \
-  _(Double) \
-  _(Int) \
-  _(Bool) \
-  _(Tuple) \
-  _(IntList) \
-  _(DoubleList) \
-  _(BoolList) \
-  _(String) \
-  _(TensorList) \
-  _(Blob) \
-  _(GenericList) \
-  _(GenericDict) \
-  _(Future) \
-  _(Device)
+  _(None)                    \
+  _(Tensor)                  \
+  _(Double)                  \
+  _(Int)                     \
+  _(Bool)                    \
+  _(Tuple)                   \
+  _(IntList)                 \
+  _(DoubleList)              \
+  _(BoolList)                \
+  _(String)                  \
+  _(TensorList)              \
+  _(Blob)                    \
+  _(GenericList)             \
+  _(GenericDict)             \
+  _(Future)                  \
+  _(Device)                  \
+  _(ModuleFunction)
 
 struct CAFFE2_API IValue final {
   IValue()
@@ -342,6 +361,7 @@ struct CAFFE2_API IValue final {
   const ivalue::DictUnorderedMap<IValue, IValue>& toGenericDictRef() const;
   const std::string& toStringRef() const;
 
+  IValue(c10::intrusive_ptr<ivalue::ModuleFunction> v);
   // ConstantString
   IValue(c10::intrusive_ptr<ivalue::ConstantString> v);
   IValue(std::string v);
@@ -449,6 +469,13 @@ struct CAFFE2_API IValue final {
       return int(toBool());
     throw std::runtime_error("IValue is not a Scalar");
   }
+
+  // ModuleFunction
+  bool isModuleFunction() const {
+    return Tag::ModuleFunction == tag;
+  }
+
+  c10::intrusive_ptr<ivalue::ModuleFunction> toModuleFunction() const;
 
   // Device
   IValue(c10::Device d)
@@ -766,6 +793,11 @@ inline IValue::IValue(c10::intrusive_ptr<ivalue::IntList> v)
 }
 inline IValue::IValue(std::vector<int64_t> v)
 : IValue(ivalue::IntList::create(std::move(v))) {}
+
+inline IValue::IValue(c10::intrusive_ptr<ivalue::ModuleFunction> v)
+    : tag(Tag::ModuleFunction), is_intrusive_ptr(true) {
+  payload.as_intrusive_ptr = v.release();
+}
 
 inline IValue::IValue(c10::intrusive_ptr<ivalue::ConstantString> v)
 : tag(Tag::String), is_intrusive_ptr(true) {
