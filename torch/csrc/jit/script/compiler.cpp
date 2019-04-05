@@ -2062,12 +2062,11 @@ struct to_ir {
           throw ErrorReport(loc) << "multiple returns aren't yet supported";
         }
 
-        for (auto member : mv->getMethod().initial_ivalues()) {
+        for (auto member : mv->getMethod().params()) {
           matched_schema->inputs.push_back(method.get_or_add_parameter(member));
         }
 
-        auto fun_constant =
-            graph->insertConstant(mf, FunctionType::create(), apply.range());
+        auto fun_constant = graph->insertConstant(mf, apply.range());
         auto call_node = graph->insertNode(create(
             prim::CallModuleFunction, apply.range(), schema.returns().size()));
 

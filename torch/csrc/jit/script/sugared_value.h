@@ -185,6 +185,7 @@ struct MethodValue : public SugaredValue {
 
  private:
   std::shared_ptr<Module> module;
+  std::shared_ptr<SugaredValue> self_;
   Method& method;
 };
 
