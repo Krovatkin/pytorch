@@ -29,6 +29,7 @@
 #include <torch/csrc/jit/resource_guard.h>
 #include <torch/csrc/jit/symbolic_variable.h>
 #include <torch/csrc/jit/tracer.h>
+#include <torch/csrc/jit/profiling_record.h>
 
 #include <torch/csrc/autograd/edge.h>
 #include <torch/csrc/autograd/function.h>
@@ -57,6 +58,11 @@ void debugSetAutodiffSubgraphInlining(bool state) {
 thread_local std::weak_ptr<Graph> last_executed_optimized_graph;
 std::shared_ptr<Graph> lastExecutedOptimizedGraph() {
   return last_executed_optimized_graph.lock();
+}
+
+bool& getProfiling() {
+  static bool profiling = false;
+  return profiling;
 }
 
 namespace {
@@ -505,7 +511,7 @@ struct GraphExecutorImpl {
   }
 
   // entry point where execution begins
-  void run(Stack& stack) {
+  virtual void run(Stack& stack) {
     AT_CHECK(
         stack.size() >= num_inputs,
         "expected ",
@@ -537,7 +543,7 @@ struct GraphExecutorImpl {
     return state;
   }
 
- private:
+protected:
   friend struct GraphExecutor;
 
   const ExecutionPlan& getOrCompileFallback() {
@@ -732,12 +738,57 @@ struct GraphExecutorImpl {
   std::mutex compile_mutex;
 };
 
+struct ProfilingGraphExecutorImpl : public GraphExecutorImpl {
+
+  using GraphExecutorImpl::GraphExecutorImpl;
+  // entry point where execution begins
+  void run(Stack& stack) override {
+
+    std::cout << "Running ProfilingGraphExecutorImpl\n";
+    AT_CHECK(
+        stack.size() >= num_inputs,
+        "expected ",
+        num_inputs,
+        " inputs, but got only ",
+        stack.size());
+
+    {
+      std::lock_guard<std::mutex> lock(compile_mutex);
+      if (!pr_)
+      {
+        auto g = graph->copy();
+        runRequiredPasses(g);
+        pr_ = ProfilingRecord::instrumentGraph(g);
+        exec_plan_ = caffe2::make_unique<ExecutionPlan>(pr_->profiled_graph_);
+      }
+    }
+
+    if (pr_->profiling_count_ > 0)
+    {
+      exec_plan_->run(stack);
+      pr_->profiled_graph_->dump();
+    }
+    else
+    {
+      AT_ERROR("Not yet implemented");
+    }
+    return;
+  }
+
+  std::unique_ptr<ProfilingRecord> pr_;
+  std::unique_ptr<ExecutionPlan> exec_plan_;
+};
+
 GraphExecutor::GraphExecutor(std::shared_ptr<Graph> graph, bool optimize)
-    : pImpl(new GraphExecutorImpl(std::move(graph), optimize)) {}
+    : pImpl(getProfiling() ?
+      new ProfilingGraphExecutorImpl(std::move(graph), optimize) :
+      new GraphExecutorImpl(std::move(graph), optimize)) {}
 
 void GraphExecutor::run(Stack& inputs) {
   return pImpl->run(inputs);
 }
+
+
 
 std::shared_ptr<Graph> GraphExecutor::graph() const {
   return pImpl->graph;

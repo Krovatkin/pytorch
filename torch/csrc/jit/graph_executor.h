@@ -48,6 +48,9 @@ TORCH_API void runRequiredPasses(const std::shared_ptr<Graph>& g);
 TORCH_API void debugSetAutodiffSubgraphInlining(bool state);
 TORCH_API std::shared_ptr<Graph> lastExecutedOptimizedGraph();
 
+
+TORCH_API bool& getProfiling();
+
 namespace detail {
 
 GraphExecutor* getGradExecutor(Operation& op);

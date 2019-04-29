@@ -233,6 +233,12 @@ void initJITBindings(PyObject* module) {
             checkAliasAnnotation(g, std::move(stack), unqualified_op_name);
           })
       .def(
+          "_set_profiling",
+          [](bool profiling) {
+            getProfiling() = profiling;
+            std::cout << "Profiling set to " << getProfiling() << std::endl;
+          })
+      .def(
           "_jit_fuser_get_fused_kernel_code",
           [](Graph& g, std::vector<at::Tensor> inps) {
             return debugGetFusedKernelCode(g, inps);
