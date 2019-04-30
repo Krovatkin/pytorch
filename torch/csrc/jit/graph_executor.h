@@ -29,7 +29,10 @@ struct GraphExecutorState {
 struct GraphExecutorImpl;
 struct TORCH_API GraphExecutor {
   GraphExecutor() = default;
-  GraphExecutor(std::shared_ptr<Graph> graph, bool optimize = true);
+  GraphExecutor(
+      std::shared_ptr<Graph> graph,
+      bool optimize = true,
+      bool profile = false);
   void run(Stack& inputs);
   explicit operator bool() const {
     return pImpl != nullptr;

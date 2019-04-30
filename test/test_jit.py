@@ -4744,6 +4744,31 @@ a")
         # NOTE: cannot optimize yet because broadcasts are not inserted before the fuser runs
         self.checkScript(script, [alpha, beta, x, y], optimize=False, outputs=outputs)
 
+    def test_profiling_graph_executor(self):
+        @torch.jit.script
+        def basic(x, y):
+            a = x + y
+            b = x * y
+            c = x + 1
+            d = a - c
+            e = b - c
+            return d + e
+
+        a = torch.rand(2, 3)
+        b = torch.rand(2, 3)
+
+        basic.__enable_profiling__()
+        basic(a, b)
+        basic(a, b)
+        basic(a, b)
+
+        # this tests that a profiling count is being decrement by
+        # a profile instruction.
+        # this is the easiest way to test that a graph was instrumented
+        # from python
+        with self.assertRaisesRegex(RuntimeError, "Not yet implemented"):
+            basic(a, b)
+
     def test_resize_input_ops(self):
         # resize_ and resize_as resize the input tensor. because our shape analysis
         # is flow invariant, we set any Tensor that can alias a resized Tensor

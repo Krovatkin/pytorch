@@ -741,10 +741,9 @@ protected:
 struct ProfilingGraphExecutorImpl : public GraphExecutorImpl {
 
   using GraphExecutorImpl::GraphExecutorImpl;
-  // entry point where execution begins
+
   void run(Stack& stack) override {
 
-    std::cout << "Running ProfilingGraphExecutorImpl\n";
     AT_CHECK(
         stack.size() >= num_inputs,
         "expected ",
@@ -766,7 +765,6 @@ struct ProfilingGraphExecutorImpl : public GraphExecutorImpl {
     if (pr_->profiling_count_ > 0)
     {
       exec_plan_->run(stack);
-      pr_->profiled_graph_->dump();
     }
     else
     {
@@ -775,14 +773,18 @@ struct ProfilingGraphExecutorImpl : public GraphExecutorImpl {
     return;
   }
 
+ private:
   std::unique_ptr<ProfilingRecord> pr_;
   std::unique_ptr<ExecutionPlan> exec_plan_;
 };
 
-GraphExecutor::GraphExecutor(std::shared_ptr<Graph> graph, bool optimize)
-    : pImpl(getProfiling() ?
-      new ProfilingGraphExecutorImpl(std::move(graph), optimize) :
-      new GraphExecutorImpl(std::move(graph), optimize)) {}
+GraphExecutor::GraphExecutor(
+    std::shared_ptr<Graph> graph,
+    bool optimize,
+    bool profile)
+    : pImpl(
+          profile ? new ProfilingGraphExecutorImpl(std::move(graph), optimize)
+                  : new GraphExecutorImpl(std::move(graph), optimize)) {}
 
 void GraphExecutor::run(Stack& inputs) {
   return pImpl->run(inputs);

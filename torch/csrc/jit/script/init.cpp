@@ -1010,6 +1010,13 @@ void initJitScriptBindings(PyObject* module) {
             }
             return result;
           })
+      .def(
+          "__enable_profiling__",
+          [](py::args args, py::kwargs kwargs) {
+            // see: [pybind11 varargs]
+            Function& callee = py::cast<Function&>(args[0]);
+            callee.get_executor(true);
+          })
       .def_property_readonly("graph", &Function::graph)
       .def_property_readonly("schema", &Function::getSchema)
       .def_property_readonly(
@@ -1057,12 +1064,16 @@ void initJitScriptBindings(PyObject* module) {
   m.def(
       "_jit_script_compile",
       [](const Def& def, ResolutionCallback rcb, FunctionDefaults defaults) {
+        std::cout << "_jit_script_compile begin, getProfiling = "
+                  << getProfiling() << std::endl;
         CompilationUnit cu;
         cu.define({def}, {pythonResolver(rcb)}, nullptr);
         std::shared_ptr<Function> defined = cu.get_functions().at(0);
         defined->setSchema(getSchemaWithNameAndDefaults(
             def.range(), defined->getSchema(), def.name().name(), defaults));
         didFinishEmitFunction(defined);
+        std::cout << "_jit_script_compile end, getProfiling = "
+                  << getProfiling() << std::endl;
         return defined;
       });
 
