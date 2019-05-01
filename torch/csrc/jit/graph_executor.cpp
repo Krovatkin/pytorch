@@ -60,11 +60,6 @@ std::shared_ptr<Graph> lastExecutedOptimizedGraph() {
   return last_executed_optimized_graph.lock();
 }
 
-bool& getProfiling() {
-  static bool profiling = false;
-  return profiling;
-}
-
 namespace {
 
 using tensor_list = std::vector<at::Tensor>;
