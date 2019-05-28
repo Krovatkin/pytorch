@@ -17,8 +17,10 @@
 #include <torch/csrc/jit/passes/create_autodiff_subgraphs.h>
 #include <torch/csrc/jit/passes/dead_code_elimination.h>
 #include <torch/csrc/jit/passes/graph_fuser.h>
+#include <torch/csrc/jit/passes/guard_elimination.h>
 #include <torch/csrc/jit/passes/inline_autodiff_subgraphs.h>
 #include <torch/csrc/jit/passes/inplace_check.h>
+#include <torch/csrc/jit/passes/insert_guards.h>
 #include <torch/csrc/jit/passes/loop_unrolling.h>
 #include <torch/csrc/jit/passes/lower_grad_of.h>
 #include <torch/csrc/jit/passes/peephole.h>
@@ -30,6 +32,7 @@
 #include <torch/csrc/jit/symbolic_variable.h>
 #include <torch/csrc/jit/tracer.h>
 #include <torch/csrc/jit/profiling_record.h>
+#include <torch/csrc/jit/passes/bailout_graph.h>
 
 #include <torch/csrc/autograd/edge.h>
 #include <torch/csrc/autograd/function.h>
@@ -763,23 +766,36 @@ struct ProfilingGraphExecutorImpl : public GraphExecutorImpl {
     }
     else
     {
-      AT_ERROR("Not yet implemented");
+      std::cout << "profiling grpah:\n";
+      auto g = pr_->profiled_graph_;
+      g->dump();
+      InsertGuards(g);
+      std::cout << "after guards inserted:\n";
+      g->dump();
+      EliminateGuards(g);
+      // std::cout << "after guards moved:\n";
+      // g->dump();
+      // InsertGuards(g);
+      // g->dump();
+      // insertBailOuts(g);
+      // g->dump();
+      // Code cd(g);
+      // InterpreterState is(cd);
+      // is.run(stack);
+      //AT_ERROR("Not yet implemented");
     }
     return;
   }
 
- private:
+private:
   std::unique_ptr<ProfilingRecord> pr_;
   std::unique_ptr<ExecutionPlan> exec_plan_;
 };
 
-GraphExecutor::GraphExecutor(
-    std::shared_ptr<Graph> graph,
-    bool optimize,
-    bool profile)
-    : pImpl(
-          profile ? new ProfilingGraphExecutorImpl(std::move(graph), optimize)
-                  : new GraphExecutorImpl(std::move(graph), optimize)) {}
+GraphExecutor::GraphExecutor(std::shared_ptr<Graph> graph, bool optimize, bool profile)
+    : pImpl(std::getenv("PYTORCH_PROFILE") != nullptr ?
+      new ProfilingGraphExecutorImpl(std::move(graph), optimize) :
+      new GraphExecutorImpl(std::move(graph), optimize)) {}
 
 void GraphExecutor::run(Stack& inputs) {
   return pImpl->run(inputs);

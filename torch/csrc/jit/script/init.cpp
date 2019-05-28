@@ -17,6 +17,7 @@
 #include <torch/csrc/jit/import_source.h>
 #include <torch/csrc/jit/irparser.h>
 #include <torch/csrc/jit/passes/python_print.h>
+#include <torch/csrc/jit/passes/bailout_graph.h>
 #include <torch/csrc/jit/pybind_utils.h>
 #include <torch/csrc/jit/python_tracer.h>
 #include <torch/csrc/jit/script/logging.h>
@@ -1010,13 +1011,20 @@ void initJitScriptBindings(PyObject* module) {
             }
             return result;
           })
-      .def(
-          "__enable_profiling__",
-          [](py::args args, py::kwargs kwargs) {
-            // see: [pybind11 varargs]
-            Function& callee = py::cast<Function&>(args[0]);
-            callee.get_executor(true);
-          })
+          .def(
+              "__enable_profiling__",
+              [](py::args args, py::kwargs kwargs) {
+                // see: [pybind11 varargs]
+                Function& callee = py::cast<Function&>(args[0]);
+                callee.get_executor(true);
+              })
+          .def(
+              "build_bailout_graph",
+              [](py::args args, py::kwargs kwargs) {
+                // see: [pybind11 varargs]
+                Function& callee = py::cast<Function&>(args[0]);
+                buildBailoutGraphForPrint(callee.graph());
+              })
       .def_property_readonly("graph", &Function::graph)
       .def_property_readonly("schema", &Function::getSchema)
       .def_property_readonly(

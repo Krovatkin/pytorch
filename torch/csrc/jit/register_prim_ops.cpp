@@ -114,7 +114,7 @@ static at::Tensor to_dispatch(
 
 RegisterOperators reg(
     {Operator(
-         "prim::profile(...) -> ()",
+         prim::profile,
          [](const Node* node) {
            // TODO: figure out why cast isn't marked as const
            auto n = const_cast<Node*>(node); // NOLINT
@@ -134,6 +134,46 @@ RegisterOperators reg(
              return 0;
            };
          }),
+     Operator(
+         "prim::Guard(Tensor(a) t) -> Tensor(a)",
+         [](const Node* node) {
+           return [](Stack& stack) {
+               AT_ERROR("Not supported!");
+               return 0;
+           };
+         }),
+         Operator(
+             "prim::BailOut(...) -> Tensor(a)",
+             [](const Node* node) {
+               auto type = node->output()->type();
+               auto in_out_index = node->i(attr::slot);
+               auto bailout_graph = node->g(attr::Subgraph);
+               auto pttp = type->expect<ProfiledTensorType>();
+               return [pttp, in_out_index, bailout_graph](Stack& stack) {
+                   auto inputs = pop(stack, bailout_graph->inputs().size());
+                   std::reverse(inputs.begin(),inputs.end());
+                   auto pttp_from_t = ProfiledTensorType::create(inputs.at(in_out_index).toTensor());
+                   if (pttp != pttp_from_t)
+                   {
+                     std::cout << "running a bailout path\n";
+                     // TODO: a hack should be good enuf to jump at the end of a graph
+                     // we shouldn't need stores
+                     Code cd(bailout_graph);
+                     InterpreterState is(cd);
+                     is.run(inputs);
+                     for (auto iv : inputs)
+                     {
+                       push(stack, iv);
+                     }
+                     return INT_MAX - 2;
+                   }
+                   else
+                   {
+                     push(stack, inputs.at(in_out_index));
+                     return 0;
+                   }
+               };
+             }),
      Operator(
          "prim::rangelist(int n) -> int[]",
          [](Stack& stack) {

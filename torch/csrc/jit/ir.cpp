@@ -16,6 +16,8 @@
 #include <unordered_set>
 #include <utility>
 
+#include <csignal>
+
 namespace torch {
 namespace jit {
 

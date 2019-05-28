@@ -453,6 +453,7 @@ struct TORCH_API Node {
   void eraseOutput(size_t i);
 
   Block* addBlock();
+  void addExistingBlock(Block *b) { blocks_.push_back(b); }
   void eraseBlock(size_t i);
 
   // Each Node can have a list of subblocks. These are used to define structured
@@ -1244,11 +1245,18 @@ struct ProfileOp : public Node {
   ProfileOp(Graph* graph, std::function<void(std::vector<IValue>&)> callback)
       : Node(graph, ::c10::prim::profile), callback_(callback) {}
 
+  ProfileOp(Graph* graph)
+      : Node(graph, ::c10::prim::profile), callback_(nullptr) {}
+
   void cloneFrom(Node* other_) override;
   Node* allocNewInstance(Graph* g) override;
 
   const std::function<void(std::vector<IValue>&)>& getCallback() const {
     return callback_;
+  }
+
+  void setCallback(std::function<void(std::vector<IValue>&)> callback) {
+    callback_ = callback;
   }
 
  private:

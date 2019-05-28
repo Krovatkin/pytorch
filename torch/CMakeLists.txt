@@ -147,6 +147,7 @@ set(TORCH_SRCS
   ${TORCH_SRC_DIR}/csrc/jit/symbolic_script.cpp
   ${TORCH_SRC_DIR}/csrc/jit/profiling_record.cpp
   ${TORCH_SRC_DIR}/csrc/jit/passes/alias_analysis.cpp
+  ${TORCH_SRC_DIR}/csrc/jit/passes/bailout_graph.cpp
   ${TORCH_SRC_DIR}/csrc/jit/passes/batch_mm.cpp
   ${TORCH_SRC_DIR}/csrc/jit/passes/canonicalize.cpp
   ${TORCH_SRC_DIR}/csrc/jit/passes/constant_propagation.cpp
@@ -159,7 +160,9 @@ set(TORCH_SRCS
   ${TORCH_SRC_DIR}/csrc/jit/passes/erase_number_types.cpp
   ${TORCH_SRC_DIR}/csrc/jit/passes/inline_fork_wait.cpp
   ${TORCH_SRC_DIR}/csrc/jit/passes/graph_fuser.cpp
+  ${TORCH_SRC_DIR}/csrc/jit/passes/guard_elimination.cpp
   ${TORCH_SRC_DIR}/csrc/jit/passes/inplace_check.cpp
+  ${TORCH_SRC_DIR}/csrc/jit/passes/insert_guards.cpp
   ${TORCH_SRC_DIR}/csrc/jit/passes/loop_unrolling.cpp
   ${TORCH_SRC_DIR}/csrc/jit/passes/lower_grad_of.cpp
   ${TORCH_SRC_DIR}/csrc/jit/passes/lower_tuples.cpp
