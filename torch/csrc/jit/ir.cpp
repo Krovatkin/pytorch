@@ -1449,7 +1449,7 @@ Node* Graph::createLoad(const std::string& name, const TypePtr& type) {
 }
 
 Value* Graph::insertFunctionCall(
-    std::shared_ptr<Function> callee,
+    std::shared_ptr<script::Function> callee,
     script::MatchedSchema& matched) {
   Value* fn_constant = insertNode(create(prim::Constant))
                            ->output()
@@ -1491,7 +1491,8 @@ Node* Graph::createClone(
     }
   }
 
-  //
+  // remember the original node
+  // r is copied from
   if (r->kind() == prim::BailOut)
   {
     bailout_map_[r] = n;
