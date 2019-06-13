@@ -1490,6 +1490,12 @@ Node* Graph::createClone(
       r->addBlock()->cloneFrom(b, value_map);
     }
   }
+
+  //
+  if (r->kind() == prim::BailOut)
+  {
+    bailout_map_[r] = n;
+  }
   return r;
 }
 

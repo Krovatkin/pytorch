@@ -973,6 +973,9 @@ struct Graph {
   // by default this is set to append to the top level block
   Node* insert_before_;
 
+  // mapping between `prim::BailOut`s in this graph
+  // and the ones this graph was copied from
+  std::unordered_map<Node*,Node*> bailout_map_;
  public:
   Graph(ScopePtr scope_root)
       : next_unique_(0),
@@ -1030,6 +1033,10 @@ struct Graph {
   }
   void set_current_scope(ScopePtr scope) {
     current_scope_ = std::move(scope);
+  }
+
+  const std::unordered_map<Node*,Node*>&  bailout_map() {
+    return bailout_map_;
   }
 
   Value* addInput(std::string name = "") {
