@@ -1,4 +1,5 @@
 #include <torch/csrc/jit/passes/canonicalize_ops.h>
+#include <torch/csrc/jit/jit_log.h>
 #include <torch/csrc/jit/passes/dead_code_elimination.h>
 #include <torch/csrc/jit/symbolic_variable.h>
 
@@ -55,9 +56,17 @@ static void CanonicalizeOps(Block* block) {
           auto graph = it->owningGraph();
           auto new_other = graph->insertConstant(other->item());
           std::vector<Value*> inputs = it->inputs().vec();
+
           inputs.at(1) = new_other;
           Value* new_output =
               graph->insertNode(graph->create(it->kind(), inputs))->output();
+          GRAPH_UPDATE(
+              "Constatizing input ",
+              it->inputs().at(0)->debugName(),
+              " of ",
+              it->kind().toQualString(),
+              " ",
+              it->output()->debugName());
           it->output()->replaceAllUsesWith(new_output);
         }
       }
@@ -66,11 +75,19 @@ static void CanonicalizeOps(Block* block) {
                    /*const_inputs=*/{attr::chunks, attr::dim})) {
       if (auto orig_outputs = getChunkOutputs(*it)) {
         WithInsertPoint guard(*it);
+        GRAPH_UPDATE("Constantizing chunk ", debugValueOrDefault(*it));
         SymbolicVariable self{it->namedInput(attr::self)};
         auto outputs = self.chunk(
             it->get<int64_t>(attr::chunks).value(),
             it->get<int64_t>(attr::dim).value());
         for (ChunkOutput orig_out : *orig_outputs) {
+          GRAPH_UPDATE(
+              "Replacing ",
+              orig_out.val,
+              " with constant chunk ",
+              outputs.at(orig_out.offset),
+              " at offset ",
+              orig_out.offset);
           orig_out.val->replaceAllUsesWith(outputs.at(orig_out.offset));
           outputs[orig_out.offset].value()->setType(orig_out.val->type());
         }

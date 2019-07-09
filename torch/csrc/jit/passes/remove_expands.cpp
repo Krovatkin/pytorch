@@ -1,4 +1,5 @@
 #include <torch/csrc/jit/passes/remove_expands.h>
+#include <torch/csrc/jit/jit_log.h>
 
 namespace torch {
 namespace jit {
@@ -11,6 +12,7 @@ static void RemoveExpands(Block* block) {
 
     if (it->kind() == aten::expand && it->get<bool>(attr::implicit) == true) {
       it->output()->replaceAllUsesWith(it->namedInput(attr::self));
+      GRAPH_UPDATE("Removing implicit aten::expand ", it->output());
       it.destroyCurrent();
     }
   }
