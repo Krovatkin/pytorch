@@ -9,6 +9,7 @@
 #include <torch/csrc/jit/passes/requires_grad_analysis.h>
 #include <torch/csrc/jit/passes/shape_analysis.h>
 #include <torch/csrc/jit/passes/specialize_autogradzero.h>
+#include <torch/csrc/jit/jit_log.h>
 
 namespace torch {
 namespace jit {
@@ -70,8 +71,10 @@ ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(Stack& stack) {
   runOptimization(copy);
   runNondiffOptimization(copy);
   EliminateDeadCode(copy);
+  
   // cache
   optimized_plan_ = ExecutionPlan(copy);
+  GRAPH_DUMP("ExecutionPlan: ", copy);
   return *optimized_plan_;
 }
 
