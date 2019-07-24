@@ -1,7 +1,9 @@
 #include <torch/csrc/jit/passes/alias_analysis.h>
 
+#include <torch/csrc/jit/jit_log.h>
 #include <torch/csrc/jit/operator.h>
 #include <torch/csrc/utils/memory.h>
+#include <sstream>
 
 namespace torch {
 namespace jit {
@@ -107,6 +109,14 @@ bool AliasDb::writesToAlias(Node* n, const ValueSet& vs) const {
   const auto writtenTo = getWrites(n);
   if (writtenTo.empty()) {
     return false;
+  }
+
+  if (jit_log_level() == JitLoggingLevels::GRAPH_DEBUG &&
+      aten::add_ == n->kind()) {
+    std::stringstream ss;
+    std::vector<const Value*> vv(vs.begin(), vs.end());
+    ss << vv;
+    GRAPH_DEBUG("Live values at a write to ", *n, " : ", ss.str());
   }
 
   MemoryLocations locs;
@@ -662,6 +672,7 @@ void AliasDb::makePointerTo(const Value* from, const Value* to) {
   auto fromEl = getOrCreateElement(from);
   auto toEl = getOrCreateElement(to);
 
+  GRAPH_DEBUG("makePointerTo: ", from->debugName(), " -> ", to->debugName());
   memoryDAG_->makePointerTo(fromEl, toEl);
 }
 
