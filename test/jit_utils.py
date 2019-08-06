@@ -274,7 +274,7 @@ class JitTestCase(TestCase):
         return defined_vars
 
     def checkScriptRaisesRegex(self, script, inputs, exception, regex,
-                               optimize=True, outputs=None, capture_output=False):
+                               optimize=True, outputs=None, capture_output=False, profiling=True):
         """
         Checks that a given function will throw the correct exception,
         when executed with normal python, the string frontend, and the AST frontend
@@ -290,7 +290,7 @@ class JitTestCase(TestCase):
             ge = getattr(cu, script.__name__)
             ge(*inputs)
         with self.assertRaisesRegex(exception, regex):
-            with enable_profiling_mode():
+            with enable_profiling_mode(profiling):
                 cu = torch.jit.CompilationUnit(source, optimize)
             ge = getattr(cu, script.__name__)
             ge(*inputs)
@@ -300,7 +300,7 @@ class JitTestCase(TestCase):
             ge = torch.jit.script(script, optimize)
             ge(*inputs)
         with self.assertRaisesRegex(exception, regex):
-            with enable_profiling_mode():
+            with enable_profiling_mode(profiling):
                 ge = torch.jit.script(script, optimize)
             ge(*inputs)
 
@@ -310,10 +310,13 @@ class JitTestCase(TestCase):
                     optimize=True,
                     name='func',
                     capture_output=False,
-                    frames_up=1):
+                    frames_up=1,
+                    profiling=True):
+
+        #import pdb; pdb.set_trace()
         if isinstance(script, str):
             # Compile the string to a Script function
-            with enable_profiling_mode():
+            with enable_profiling_mode(profiling):
                 cu = torch.jit.CompilationUnit(script, optimize, _frames_up=frames_up)
 
             # Execute the Python function so we can run it later and get its
@@ -338,12 +341,12 @@ class JitTestCase(TestCase):
                 frames_up=2)
 
             # Continue checking the Python frontend
-            with enable_profiling_mode():
+            with enable_profiling_mode(profiling):
                 scripted_fn = torch.jit.script(script, optimize, _frames_up=1)
             python_fn = script
 
         if capture_output:
-            with enable_profiling_mode():
+            with enable_profiling_mode(profiling):
                 with self.capture_stdout() as script_stdout:
                     script_outputs = scripted_fn(*inputs)
                 with self.capture_stdout() as _python_stdout:
@@ -351,7 +354,7 @@ class JitTestCase(TestCase):
                 if not IS_WINDOWS:
                     self.assertExpected(script_stdout[0], subname='stdout')
         else:
-            with enable_profiling_mode():
+            with enable_profiling_mode(profiling):
                 python_outputs = python_fn(*inputs)
                 # profiling run
                 script_outputs = scripted_fn(*inputs)
@@ -482,8 +485,8 @@ class JitTestCase(TestCase):
         return results
 
 @contextmanager
-def enable_profiling_mode():
-    torch._C._jit_set_profiling_mode(True)
+def enable_profiling_mode(flag):
+    torch._C._jit_set_profiling_mode(flag)
     try:
         yield
     finally:

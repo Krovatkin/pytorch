@@ -533,18 +533,22 @@ static ReverseDetails addReverseInline(Gradient& grad_desc) {
   };
   const auto set_grad = [&](Value* x, Value* dx) {
     if (Value* prev_grad = grad_map[x]) {
+      std::cout << "grad_map for  " << x->debugName() << " is already set to " << prev_grad->debugName() << std::endl;
       grad_map[x] = createAutogradAdd(prev_grad, dx);
     } else {
       grad_map[x] = dx;
     }
   };
 
+  std::cout << "autodiffing graph = \n";
+  graph.dump();
   auto outputs = graph.outputs();
   for (size_t i = 0, num_outputs = outputs.size(); i < num_outputs; ++i) {
     Value* output = outputs[i];
     if (!output->requires_grad())
       continue;
     Value* output_grad = reverse_block->addInput()->setType(output->type());
+    std::cout << "autodiff setting " << output->debugName() << " to " << output_grad->debugName() << std::endl;
     set_grad(output, output_grad);
     grad_desc.df_input_vjps.push_back(i);
   }
@@ -573,6 +577,7 @@ static ReverseDetails addReverseInline(Gradient& grad_desc) {
       // aten::type_as case.
       if (!grad_inputs[i])
         continue;
+      std::cout << "autodiff setting " << inputs[i]->debugName() << " to " << grad_inputs[i]->debugName() << std::endl;
       set_grad(inputs[i], grad_inputs[i]);
     }
   }
@@ -810,8 +815,12 @@ static void lambdaLiftReverse(Gradient& grad_desc, ReverseDetails& rev_info) {
     // f's outputs that we differentiate).
     if (rev_info.grad_map.count(tmp) == 0)
       continue;
+
+      
     Value* tmp_vjp_in = reverse_block->addInput()->setType(tmp->type());
+    std::cout << "autodiff: temp " << tmp->debugName() << " receives gradient " << tmp_vjp_in->debugName() << std::endl;
     Value* tmp_vjp_prev = rev_info.grad_map.at(tmp);
+    std::cout << "autodiff: temp " << tmp->debugName() << " was set to " << tmp_vjp_prev->debugName() << " before\n";
     // This is quite weird because we can't first make a sum and then replace
     // all uses of tmp_vjp_prev (that would replace its use in the sum too!), so
     // we create an incorrect sum that doesn't use prev vjp, replace uses, and

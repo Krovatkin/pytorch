@@ -29,6 +29,7 @@ std::ostream& operator<<(std::ostream & out, const Type & t) {
     if  (value->scalarType().has_value())
     {
         out << *value->scalarType();
+        out << ", requires_grad = " << *value->requiresGrad();
     }
     else
     {

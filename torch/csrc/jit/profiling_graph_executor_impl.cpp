@@ -38,11 +38,31 @@ ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(Stack& stack) {
 
   if (!pr_) {
     pr_ = ProfilingRecord::instrumentGraph(prepareGraph(graph, stack));
-    profiling_plan_ = ExecutionPlan(pr_->profiled_graph_);
+    auto copy = pr_->graph()->copy();
+    // to lower GradOf
+    std::cout << "before setting profling to 1\n";
+    std::cout << "before running runRequiredPasses for profiled graph\n";
+    std::cout << "getProfilingMode() = " << getProfilingMode() << std::endl;
+    std::cout << "getProfilingMode() = " << & (getProfilingMode()) << std::endl;
+    copy->dump();
+    getProfilingMode() = 1;
+    std::cout << "after setting profiling to 1";
+    std::cout << "before running runRequiredPasses for profiled graph\n";
+    std::cout << "getProfilingMode() = " << getProfilingMode() << std::endl;
+    std::cout << "getProfilingMode() = " << & (getProfilingMode()) << std::endl;
+    runRequiredPasses(copy);
+    profiling_plan_ = ExecutionPlan(copy);
+    getProfilingMode() = 0;
+    std::cout << "before running runRequiredPasses for profiled graph\n";
+    std::cout << "getProfilingMode() = " << getProfilingMode() << std::endl;
+    std::cout << "getProfilingMode() = " << & (getProfilingMode()) << std::endl;
+    std::cout << "setting profiling_plan_ for " << this << std::endl;
+    copy->dump();
     // fall-through
   }
 
   if (!pr_->ready()) {
+    std::cout << "still profiling for " << this << std::endl;
     return *profiling_plan_;
   }
   // copy already has differentiableGraphs
@@ -52,8 +72,12 @@ ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(Stack& stack) {
   EliminateRedundantGuards(copy);
   InsertBailOuts(copy);
   // TODO: this runs specializeAutogradZero ??
+  GRAPH_DUMP("After InsertBailOuts: ", copy);
+  std::cout << "before running runRequiredPasses\n";
+  copy->dump();
   runRequiredPasses(copy);
   if (needsGradient(copy)) {
+    GRAPH_DEBUG("needs grad");
     auto diff_nodes = CreateAutodiffSubgraphs(
         copy, getAutodiffSubgraphInlining() ? autodiffSubgraphNodeThreshold : 1);
     for (Node* dnode : diff_nodes) {
@@ -67,20 +91,27 @@ ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(Stack& stack) {
     InlineAutodiffSubgraphs(
         copy, getAutodiffSubgraphInlining() ? autodiffSubgraphInlineThreshold : 1);
   }
+  GRAPH_DUMP("InlineAutodiffSubgraphs: ", copy);
   ConstantPropagation(copy);
   runOptimization(copy);
   runNondiffOptimization(copy);
   EliminateDeadCode(copy);
-  
+
   // cache
   optimized_plan_ = ExecutionPlan(copy);
+  std::cout << "setting optimized_plan for " << this << std::endl;
   GRAPH_DUMP("ExecutionPlan: ", copy);
   return *optimized_plan_;
 }
 
 
 GraphExecutorState ProfilingGraphExecutorImpl::getDebugState() {
-  AT_ERROR("not supported");
+  GraphExecutorState state;
+  std::cout << "getting optimized_plan for " << this << std::endl;
+  TORCH_INTERNAL_ASSERT(optimized_plan_);
+  auto opt_plan = *optimized_plan_;
+  state.execution_plans.emplace(ArgumentSpec{0, 0}, opt_plan);
+  return state;
 }
 
 } // namespace jit

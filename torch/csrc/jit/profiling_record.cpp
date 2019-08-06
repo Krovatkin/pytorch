@@ -34,13 +34,24 @@ void ProfilingRecord::instrumentBlock(Block* block) {
         IValue t;
         pop(stack, t);
         if (t.isTensor()) {
-          auto pttp = ProfiledTensorType::create(t.toTensor());
-          std::lock_guard<std::mutex> lock(this->mutex_);
-          if (pno->type()->isSubclass(TypeKind::ProfiledTensorType)) {
-            auto type = pno->type()->cast<ProfiledTensorType>();
-            pno->setType(type->merge(pttp));
-          } else {
-            pno->setType(pttp);
+
+          if (t.toTensor().defined())
+          {
+            std::cout << "pno = " << pno->debugName() << std::endl;
+            auto pttp = ProfiledTensorType::create(t.toTensor());
+            std::lock_guard<std::mutex> lock(this->mutex_);
+            if (pno->type()->isSubclass(TypeKind::ProfiledTensorType)) {
+              auto type = pno->type()->cast<ProfiledTensorType>();
+              std::cout << "pno undefined  = " << type->is_undefined_grad_tensor() << std::endl;
+              std::cout << "pttp = " << pttp->is_undefined_grad_tensor() << std::endl;
+              pno->setType(type->merge(pttp));
+            } else {
+              pno->setType(pttp);
+            }
+          }
+          else
+          {
+            pno->setType(ProfiledTensorType::createUndefinedTensorGrad());
           }
         }
         // passing t through

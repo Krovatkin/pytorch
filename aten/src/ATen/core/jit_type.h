@@ -529,6 +529,11 @@ struct CAFFE2_API ProfiledTensorType : public TensorType {
     TORCH_INTERNAL_ASSERT(false, "Expected a tensor type");
   }
 
+  static ProfiledTensorTypePtr createUndefinedTensorGrad() {
+    c10::optional<size_t> sz;
+    return ProfiledTensorTypePtr(new ProfiledTensorType({}, {}, VaryingShape{sz}, VaryingShape{sz}, {}, true));
+  }
+
   static ProfiledTensorTypePtr create(c10::optional<at::ScalarType> scalar_type, c10::optional<Device> device,const VaryingShape& sizes, const VaryingStrides& strides, c10::optional<bool> requires_grad)
   {
       return ProfiledTensorTypePtr(new ProfiledTensorType(scalar_type, device, sizes, strides, requires_grad));
@@ -546,6 +551,7 @@ struct CAFFE2_API ProfiledTensorType : public TensorType {
   const VaryingShape& sizes() const { return sizes_; }
   const VaryingStrides& strides() const { return strides_; }
   c10::optional<at::Device> device() const { return device_; }
+  bool is_undefined_grad_tensor() const { return is_undefined_grad_tensor_; }
   c10::optional<at::ScalarType> scalarType() const { return scalar_type_; }
   c10::optional<bool> requiresGrad() const { return requires_grad_; }
   bool requires_grad() const override {
@@ -593,6 +599,7 @@ struct CAFFE2_API ProfiledTensorType : public TensorType {
 
   ProfiledTensorTypePtr merge(ProfiledTensorTypePtr other)
   {
+    TORCH_INTERNAL_ASSERT(this->is_undefined_grad_tensor_ == other->is_undefined_grad_tensor_, "Undefined gradients aren't expected to become defined");
     auto scalar_type = merge_primitive(scalarType(), other->scalarType());
     auto dev = merge_primitive(device(), other->device());
     auto sz = sizes().merge(other->sizes());
@@ -610,14 +617,17 @@ private:
     , device_(tensor.device())
     , sizes_(tensor.sizes().vec())
     , strides_(tensor.strides().vec())
-    , requires_grad_(tensor.requires_grad()) {}
-    ProfiledTensorType(c10::optional<at::ScalarType> scalar_type, c10::optional<Device> device,const VaryingShape& sizes, const VaryingStrides& strides, c10::optional<bool> requires_grad)
+    , requires_grad_(tensor.requires_grad())
+    , is_undefined_grad_tensor_(false)
+     {}
+    ProfiledTensorType(c10::optional<at::ScalarType> scalar_type, c10::optional<Device> device,const VaryingShape& sizes, const VaryingStrides& strides, c10::optional<bool> requires_grad, bool is_undefined = false)
     : TensorType()
     , scalar_type_(scalar_type)
     , device_(device)
     , sizes_(sizes)
     , strides_(strides)
     , requires_grad_(requires_grad)
+    , is_undefined_grad_tensor_(is_undefined)
     {}
 
   c10::optional<at::ScalarType> scalar_type_;
@@ -625,6 +635,7 @@ private:
   VaryingShape sizes_;
   VaryingStrides strides_;
   c10::optional<bool> requires_grad_;
+  bool is_undefined_grad_tensor_;
 };
 
 struct CompleteTensorType;

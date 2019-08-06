@@ -58,6 +58,8 @@ AliasDb::~AliasDb() = default;
 AliasDb::AliasDb(std::shared_ptr<Graph> graph) : graph_(std::move(graph)) {
   memoryDAG_ = torch::make_unique<MemoryDAG>();
   analyze(graph_);
+  //std::cerr << "AliasDb:\n";
+  //dump();
 }
 
 bool AliasDb::hasWriters(const Node* n) const {
@@ -114,9 +116,11 @@ bool AliasDb::writesToAlias(Node* n, const ValueSet& vs) const {
   if (jit_log_level() == JitLoggingLevels::GRAPH_DEBUG &&
       aten::add_ == n->kind()) {
     std::stringstream ss;
-    std::vector<const Value*> vv(vs.begin(), vs.end());
-    ss << vv;
-    GRAPH_DEBUG("Live values at a write to ", *n, " : ", ss.str());
+    for (const auto& v : vs)
+    {
+          ss << v->debugName() << ", ";
+    }
+    GRAPH_DEBUG("Live values at a write to ", *n, " : ", ss.str(), "\n");
   }
 
   MemoryLocations locs;
@@ -125,6 +129,7 @@ bool AliasDb::writesToAlias(Node* n, const ValueSet& vs) const {
     if (it != elementMap_.end()) {
       const auto& vlocs = it->second->getMemoryLocations();
       if (writtenTo.intersects(vlocs)) {
+        GRAPH_DEBUG("node ", *n, " writes to ", v->debugName());
         return true;
       }
     }
@@ -171,47 +176,50 @@ MemoryLocations AliasDb::getReads(Node* n) const {
 
 static std::string getElementName(const Element* e) {
   if (e->value == nullptr) {
-    return "WILDCARD";
+    std::stringstream ss{};
+    ss << "WILDCARD ";
+    ss << e;
+    return ss.str();
   } else {
     return e->value->debugName();
   }
 }
 
 void AliasDb::dump() const {
-  std::cout << "\n===1. GRAPH===\n";
+  std::cerr << "\n===1. GRAPH===\n";
   graph_->dump();
 
-  std::cout << "\n===2. ALIAS DB===\n";
+  std::cerr << "\n===2. ALIAS DB===\n";
   for (const auto& ptrPair : elementMap_) {
     const auto element = ptrPair.second;
     if (!element->pointsTo.empty()) {
-      std::cout << getElementName(element) << " points to: ";
+      std::cerr << getElementName(element) << " points to: ";
       for (const auto pointedTo : element->pointsTo) {
-        std::cout << getElementName(memoryDAG_->fromIndex(pointedTo)) << ", ";
+        std::cerr << getElementName(memoryDAG_->fromIndex(pointedTo)) << ", ";
       }
-      std::cout << "\n";
+      std::cerr << "\n";
     }
     if (!element->containedElements.empty()) {
-      std::cout << getElementName(element) << " contains: ";
+      std::cerr << getElementName(element) << " contains: ";
       for (const auto contained : element->containedElements) {
-        std::cout << getElementName(memoryDAG_->fromIndex(contained)) << ", ";
+        std::cerr << getElementName(memoryDAG_->fromIndex(contained)) << ", ";
       }
-      std::cout << "\n";
+      std::cerr << "\n";
     }
   }
 
-  // std::cout << "\n===3. Writes===\n";
+  // std::cerr << "\n===3. Writes===\n";
   // for (const auto& pr : writeIndex_) {
   //   const auto node = pr.first;
   //   const auto& values = pr.second;
-  //   std::cout << *node;
-  //   std::cout << "  ";
+  //   std::cerr << *node;
+  //   std::cerr << "  ";
   //   for (const auto value : values) {
-  //     std::cout << value->debugName() << ", ";
+  //     std::cerr << value->debugName() << ", ";
   //   }
-  //   std::cout << "\n";
+  //   std::cerr << "\n";
   // }
-  std::cout << "\n";
+  std::cerr << "\n";
 }
 
 void AliasDb::analyze(const std::shared_ptr<Graph>& graph) {
@@ -297,20 +305,18 @@ void AliasDb::analyzeImpl(Node* node) {
     case prim::SetAttr:
       return analyzeSetAttr(node);
     case prim::profile:
-      AT_ERROR("Analyzing prim::profile isn't yet implemented");
-      // TODO: simply mapping inputs' aliases to outputs'
-      // should work but a) we should probably avoid exposing
-      // prim::profile to optimizations b) the alias semantics
-      // might be more complicated than just mapAliases
-      // mapAliases(node->inputs(), node->outputs());
+      if (node->inputs().size() > 0)
+      {
+        makePointerTo(node->output(), node->inputs().at(0));
+      }
       return;
     case prim::BailOut:
       TORCH_INTERNAL_ASSERT(
           node->inputs().at(0)->node()->kind() == prim::BailoutTemplate);
-      makePointerTo(node->inputs().at(1), node->output());
+      makePointerTo(node->output(), node->inputs().at(1));
       return;
     case prim::Guard:
-      makePointerTo(node->inputs().at(0), node->output());
+      makePointerTo(node->output(), node->inputs().at(0));
       return;
     case prim::CallFunction:
     case prim::CallMethod:
@@ -1207,6 +1213,7 @@ void AliasDb::setWildcard(const Value* v) {
   }
   auto e = getOrCreateWildcard(v->type());
   TORCH_INTERNAL_ASSERT(e != nullptr);
+  GRAPH_DEBUG("Mapping ", v->debugName(), " to ", e);
   memoryDAG_->makePointerTo(getOrCreateElement(v), e);
 }
 

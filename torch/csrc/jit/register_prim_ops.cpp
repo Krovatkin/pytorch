@@ -773,6 +773,7 @@ RegisterOperators reg(
            return [=](Stack& stack) {
              at::Tensor a, b;
              pop(stack, a, b);
+             TORCH_INTERNAL_ASSERT(a.defined() || b.defined());
              if (!a.defined())
                stack.emplace_back(b);
              else if (!b.defined())

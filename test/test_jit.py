@@ -195,6 +195,11 @@ def get_execution_plan(graph_executor_state):
 def get_grad_executor(plan_state, diff_graph_idx=None):
     if diff_graph_idx is None:
         nodes = list(plan_state.graph.nodes())
+        for n in nodes:
+            print ("kind = ", n.kind())
+        nodes = filter(lambda n : n.kind() != "prim::BailOut" and n.kind() != "prim::BailoutTemplate", nodes)
+        print(plan_state.graph)
+        print("nodes length = "+str(len(nodes)))
         if len(nodes) == 1 or (len(nodes) == 2 and nodes[1].kind() == "prim::TupleConstruct"):
             pass
         else:
