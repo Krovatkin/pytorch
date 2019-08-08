@@ -212,7 +212,7 @@ struct GraphFuser {
     // are not necessarily correct.
     if (node->owningBlock() != block_)
       return false;
-    if (node->kind() == aten::_grad_sum_to_size) {
+    if (node->kind() == aten::_grad_sum_to_size && !getProfilingMode()) {
       // We only fuse _grad_sum_to_size if
       // - we will fuse its input next (checked here)
       // - we can commute the _grad_sum_to_size with everything
@@ -368,6 +368,12 @@ struct GraphFuser {
           // so we generally don't allow fusing tensor-scalar operations unless
           // the scalar is constant. In those cases we inline the constants
           // directly in the body of the fused group.
+          if (input->node()->kind() != prim::Constant)
+          {
+            std::cout << "before assert :" << input->node()->kind().toQualString() << std::endl;
+            std::cout << "n = " <<  *n << std::endl;
+            std::cout << "input" << *input->node() << std::endl;
+          }
           AT_ASSERT(input->node()->kind() == prim::Constant);
           Node* in_const =
               subgraph.createClone(input->node(), [](Value*) -> Value* {

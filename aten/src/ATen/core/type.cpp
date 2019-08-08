@@ -25,17 +25,24 @@ std::ostream& operator<<(std::ostream & out, const Type & t) {
     }
     out << ")";
   } else if (auto value = t.cast<ProfiledTensorType>()) {
-    out << "ProfiledTensor(dtype = ";
-    if  (value->scalarType().has_value())
+    if (value->is_undefined_grad_tensor())
     {
-        out << *value->scalarType();
-        out << ", requires_grad = " << *value->requiresGrad();
+      out << "ProfiledTensor(Undefined Gradient)";
     }
-    else
+    else 
     {
-      out << " dynamic";
+      out << "ProfiledTensor(dtype = ";
+      if  (value->scalarType().has_value())
+      {
+          out << *value->scalarType();
+          out << ", requires_grad = " << *value->requiresGrad();
+      }
+      else
+      {
+        out << " dynamic";
+      }
+      out << " , shape = " << value->sizes();
     }
-    out << " , shape = " << value->sizes();
   } else if (auto value = t.cast<DimensionedTensorType>()) {
     out << toString(value->scalarType()) << "(";
     for (int64_t i = 0; i < value->dim(); ++i) {

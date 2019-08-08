@@ -280,8 +280,9 @@ class TestFuser(JitTestCase):
             print("after checkScript")
             c = s(inp1, inp2)
             with enable_profiling_mode(True):
-                c.sum().backward(grad_tensors=[torch.ones(1)])
-                c = s(inp1, inp2)
+                print ("doing backward")
+                c.sum().backward()
+                print ("doing second backward")
                 c.sum().backward()
             graph = backward_graph(s)
             #self.assertAllFused(graph)

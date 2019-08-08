@@ -10,6 +10,10 @@
 #include <torch/csrc/jit/passes/shape_analysis.h>
 #include <torch/csrc/jit/passes/specialize_autogradzero.h>
 #include <torch/csrc/jit/jit_log.h>
+#include <torch/csrc/jit/passes/lower_grad_of.h>
+#include <torch/csrc/jit/passes/remove_expands.h>
+#include <torch/csrc/jit/passes/canonicalize_ops.h>
+
 
 namespace torch {
 namespace jit {
@@ -50,7 +54,14 @@ ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(Stack& stack) {
     std::cout << "before running runRequiredPasses for profiled graph\n";
     std::cout << "getProfilingMode() = " << getProfilingMode() << std::endl;
     std::cout << "getProfilingMode() = " << & (getProfilingMode()) << std::endl;
-    runRequiredPasses(copy);
+    //runRequiredPasses(copy);
+    
+    LowerGradOf(*copy);
+    std::cout << "after LowerGradOf\n";
+    copy->dump();
+    RemoveExpands(copy);
+    CanonicalizeOps(copy);
+    EliminateDeadCode(copy);
     profiling_plan_ = ExecutionPlan(copy);
     getProfilingMode() = 0;
     std::cout << "before running runRequiredPasses for profiled graph\n";
@@ -66,9 +77,12 @@ ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(Stack& stack) {
     return *profiling_plan_;
   }
   // copy already has differentiableGraphs
+  bool old_profiling = getProfilingMode();
+  getProfilingMode() = true;
   auto copy = pr_->graph()->copy();
   // insert bailouts
   InsertGuards(copy);
+  runRequiredPasses(copy);
   EliminateRedundantGuards(copy);
   InsertBailOuts(copy);
   // TODO: this runs specializeAutogradZero ??
@@ -96,10 +110,11 @@ ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(Stack& stack) {
   runOptimization(copy);
   runNondiffOptimization(copy);
   EliminateDeadCode(copy);
-
+  getProfilingMode() = old_profiling;
   // cache
   optimized_plan_ = ExecutionPlan(copy);
   std::cout << "setting optimized_plan for " << this << std::endl;
+  copy->dump();
   GRAPH_DUMP("ExecutionPlan: ", copy);
   return *optimized_plan_;
 }

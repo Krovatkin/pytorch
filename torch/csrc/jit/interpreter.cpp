@@ -1002,9 +1002,19 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
             ++af.pc;
           } break;
           case GUARD: {
-            auto actual = ProfiledTensorType::create(stack.back().toTensor());
-            const TypePtr& expected = af.types[inst.X];
-            push(stack, *expected == *actual);
+            auto t = stack.back().toTensor();
+            if (t.defined())
+            {
+              auto actual = ProfiledTensorType::create(stack.back().toTensor());
+              const TypePtr& expected = af.types[inst.X];
+              push(stack, *expected == *actual);
+            }
+            else
+            {
+              std::cout << "tensor isn't defined!\n";
+              AT_ERROR("BOOM!");
+              push(stack, false);
+            }
             ++af.pc;
           } break;
           case TAIL_CALL: {

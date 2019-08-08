@@ -545,7 +545,8 @@ struct CAFFE2_API ProfiledTensorType : public TensorType {
         pttp->device(),
         pttp->sizes(),
         pttp->strides(),
-        pttp->requiresGrad()));
+        pttp->requiresGrad(),
+        pttp->is_undefined_grad_tensor()));
   }
 
   const VaryingShape& sizes() const { return sizes_; }

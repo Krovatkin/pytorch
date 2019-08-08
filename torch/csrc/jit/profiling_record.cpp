@@ -18,6 +18,32 @@ ProfileOp* ProfilingRecord::createProfileNode(
   return pn;
 }
 
+static void unprofileGraphInputs(const std::shared_ptr<Graph>& graph)
+{
+  for (auto i : graph->inputs())
+  {
+    if (i->type()->isSubclass(TypeKind::TensorType)) {
+      i->setType(TensorType::get());
+    }
+  }
+}
+
+static void unprofileBlock(Block* block)
+{
+  for (auto it = block->nodes().begin(); it != block->nodes().end(); ++it) {
+    auto n = *it;
+    for (auto o : n->outputs()) {
+      if (o->type()->isSubclass(TypeKind::TensorType)) {
+        o->setType(TensorType::get());
+      }
+    }
+
+    for (auto b : n->blocks()) {
+      unprofileBlock(b);
+    }
+  }
+}
+
 void ProfilingRecord::instrumentBlock(Block* block) {
   for (auto it = block->nodes().begin(); it != block->nodes().end(); ++it) {
     auto n = *it;
@@ -51,7 +77,9 @@ void ProfilingRecord::instrumentBlock(Block* block) {
           }
           else
           {
+            
             pno->setType(ProfiledTensorType::createUndefinedTensorGrad());
+            std::cout << "setting undefined tensor type for value " << pno->debugName() << " type = " << pno->type() << " type = " << *pno->type() << std::endl;
           }
         }
         // passing t through
@@ -74,7 +102,11 @@ std::unique_ptr<ProfilingRecord> ProfilingRecord::instrumentGraph(
   auto new_g = graph->copy();
   auto pr = std::unique_ptr<ProfilingRecord>(new ProfilingRecord(new_g));
   auto raw_pr = pr.get();
-
+  
+  unprofileGraphInputs(new_g);
+  unprofileBlock(new_g->block());
+  std::cout << "after unprofiling\n";
+  new_g->dump();
   pr->instrumentBlock(new_g->block());
   std::function<void(Stack&)> counter = [raw_pr](Stack&) {
     std::lock_guard<std::mutex> lock(raw_pr->mutex_);

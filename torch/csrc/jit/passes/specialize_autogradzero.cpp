@@ -22,11 +22,12 @@ void specializeAutogradZero(Graph& g, bool in_profiling_mode) {
     } else if (tp->isSubtypeOf(TensorType::get())
                 || tp->isSubtypeOf(ListType::ofTensors())) {
 
-      std::cout << "processing type = " << *tp << std::endl;
-      std::cout << "getProfilingMode = " << getProfilingMode() << std::endl;
+      // std::cout << "processing type = " << *tp << std::endl;
+      // std::cout << "getProfilingMode = " << getProfilingMode() << std::endl;
       std::cout << "getProfilingMode() = " << getProfilingMode() << std::endl;
       std::cout << "getProfilingMode() = " << & (getProfilingMode()) << std::endl;
-      state[input] = getProfilingMode() && !tp->cast<ProfiledTensorType>() ? State::Unknown : State::Nonzero;
+      //state[input] = getProfilingMode() && !tp->cast<ProfiledTensorType>() ? State::Unknown : State::Nonzero;
+      state[input] = getProfilingMode() ? State::Unknown : State::Nonzero;
       std::cout << "state[input] = " << (int)state[input] << std::endl;
     } else {
       state[input] = State::Unknown;
@@ -70,7 +71,8 @@ void specializeAutogradZero(Graph& g, bool in_profiling_mode) {
             {
               std::cout << "input " << input->debugName() << " is unknown!!!\n";
             }
-            AT_ASSERT(state[input] != State::Unknown || getProfilingMode());
+            //AT_ASSERT(state[input] != State::Unknown /* || getProfilingMode()*/);
+            AT_ASSERT(state[input] != State::Unknown);
           }
           // hoist the nodes in the GradOf body to be before the linear block
           for (auto it = body->nodes().begin(); it != body->nodes().end();) {
@@ -106,12 +108,14 @@ void specializeAutogradZero(Graph& g, bool in_profiling_mode) {
           state[new_add] = State::Nonzero;
           n->output()->replaceAllUsesWith(new_add);
           it.destroyCurrent();
-        } else if (getProfilingMode() && a->type()->isSubtypeOf(TensorType::get()) && b->type()->isSubtypeOf(TensorType::get())) {
-          std::cout << "before aadd\n";
-          std::cout << *n;
-          state[n->output()] = State::Nonzero;
-          std::cout << "after aadd\n";
-        } else {
+        } 
+        // else if (getProfilingMode() && a->type()->isSubtypeOf(TensorType::get()) && b->type()->isSubtypeOf(TensorType::get())) {
+        //   std::cout << "before aadd\n";
+        //   std::cout << *n;
+        //   state[n->output()] = State::Nonzero;
+        //   std::cout << "after aadd\n";
+        // } 
+        else {
           // otherwise we have conditionally-Nonzero things, and we need
           // to actually run an AutogradAdd which will guard for Zeros
           // so we leave the op as is
@@ -134,7 +138,13 @@ void specializeAutogradZero(Graph& g, bool in_profiling_mode) {
         {
           state[n->output()] = ptt->is_undefined_grad_tensor() ? State::Zero : State::Nonzero;
         }
-      }
+      } break;
+      case prim::Guard: {
+        auto ptt = n->output()->type()->expect<ProfiledTensorType>();
+        std::cout << "setting guard " << n->output()->debugName() << " type = " << n->output()->type().get() << std::endl;
+        state[n->output()] = ptt->is_undefined_grad_tensor() ? State::Zero : State::Nonzero;
+        
+      } break;
       default:
         for (auto o : n->outputs()) {
           state[o] = State::Unknown;

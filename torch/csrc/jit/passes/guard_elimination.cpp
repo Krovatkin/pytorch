@@ -165,6 +165,14 @@ struct GuardElimination {
       case aten::min:
       case aten::max:
       case prim::ConstantChunk:
+      case aten::type_as:
+      case aten::ge:
+      case aten::gt:
+      case aten::lt:
+      case aten::le:
+      case aten::eq:
+      case aten::ne:
+      case aten::neg:      
         return checkInputs(n, no_exceptions);
       case aten::clamp:
         //the second and third args do not affect shapes

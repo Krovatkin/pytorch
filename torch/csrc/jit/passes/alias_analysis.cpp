@@ -246,6 +246,10 @@ bool AliasDb::tryRegisteredAnalysis(Node* node) {
   auto analysis = op.aliasAnalysisKind();
   switch (analysis) {
     case AliasAnalysisKind::PURE:
+      if (prim::AutogradAnyNonZero == node->kind())
+      {
+        std::cout << "AutogradAnyNonZero is now pure!\n";
+      }
       analyzeCreator(node);
       return true;
     case AliasAnalysisKind::DEFAULT:
@@ -330,7 +334,7 @@ void AliasDb::analyzeImpl(Node* node) {
       if (tryRegisteredAnalysis(node)) {
         return;
       }
-      TORCH_INTERNAL_ASSERT(!aliasAnalysisHasSpecialCaseFor(node->kind()));
+      TORCH_INTERNAL_ASSERT(!aliasAnalysisHasSpecialCaseFor(node->kind()), "Node's opcode: ", node->kind().toQualString());
   }
 
   const auto& schema = node->schema();

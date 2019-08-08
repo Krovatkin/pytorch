@@ -222,8 +222,32 @@ class GradientHelper {
       // We insert after the current node because we want to use
       // its output.
       WithInsertPoint insert_guard{node->next()};
-      size = SymbolicVariable(node->namedInput(input_name))
-                 .size_if_not_equal(fw_output);
+      std::cout << "gradSumToSizeOf:\n";
+      std::cout << "fw_output = " << fw_output.value()->debugName() << " type = " << *fw_output.value()->type() << std::endl;
+      std::cout << "input = " << node->namedInput(input_name)->debugName() << " type = " << *node->namedInput(input_name)->type() << std::endl;
+
+      auto ptt_input = node->namedInput(input_name)->type()->cast<ProfiledTensorType>();
+      auto ptt_output = fw_output.value()->type()->cast<ProfiledTensorType>();
+      auto dynamic_size = c10::optional<std::vector<int64_t>>{};
+      auto input_size = ptt_input ? ptt_input->sizes().concrete_sizes() : dynamic_size;
+      auto output_size = ptt_output ? ptt_output->sizes().concrete_sizes() : dynamic_size;
+
+      if (input_size && output_size) 
+      {
+        IValue ival{};
+        if (input_size != output_size)
+        {
+          //IValue ival_list_size(input_size);
+          ival = IValue(input_size);
+        }
+        size = node->owningGraph()->insertConstant(ival, OptionalType::create(ListType::ofInts()));
+        std::cout << "inserted node = " << *size->node() << std::endl;
+      }
+      else
+      {
+        size = SymbolicVariable(node->namedInput(input_name))
+                  .size_if_not_equal(fw_output);
+      }
     }
     return v.gradSumToSize(size);
   };
