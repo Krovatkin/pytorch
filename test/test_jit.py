@@ -212,7 +212,9 @@ def all_backward_graphs(script_module, diff_graph_idx=None):
     # Note: for Python 2 the order seems to be unstable
     ge_state = script_module.get_debug_state()
     fwd_plan = get_execution_plan(ge_state)
+    print ("before get_grad_executor")
     grad_executor_state = get_grad_executor(fwd_plan, diff_graph_idx=diff_graph_idx)
+    print ("after get_grad_executor")
     bwd_plans = list(grad_executor_state.execution_plans.values())
     return [p.graph.copy() for p in bwd_plans]
 
@@ -4201,7 +4203,7 @@ a")
 
         a = torch.rand(2, 3)
 
-        with enable_profiling_mode():
+        with enable_profiling_mode(True):
             # check prim::profile are inserted
             profiled_graph_str = str(def_in_one_branch.graph_for(a, True))
             FileCheck().check_count("prim::profile", 4).run(profiled_graph_str)
@@ -4218,6 +4220,24 @@ a")
             self.assertEqual(def_in_one_branch(a, False), 6.0)
             # this triggers 2 bailouts
             self.assertEqual(def_in_one_branch(a, True), 3.0)
+
+
+    # def test_bram(self):
+
+    #     with enable_profiling_mode(True):
+
+    #         @torch.jit.script
+    #         def func2(a, b, c):
+
+    #             d = a * 2
+    #             e = b + 3
+    #             f = a - b
+    #             return torch.clamp(f + e, min=0, max=2)
+
+    #         a = torch.rand(2,2)
+    #         b = torch.rand(2,2)
+    #         func2(a,a,a)
+    #         func2(a,a,a)
 
 
     def test_resize_input_ops(self):
@@ -12072,6 +12092,7 @@ a")
         FileCheck().check("prim::Loop").check_not("aten::rand").check("aten::__getitem__") \
             .check_count("aten::rand", 1, exactly=True).run(str(foo.graph))
 
+    @unittest.skip("demonstrating skipping")
     def test_mutable_dce_wildcards(self):
         def fn():
             x = torch.ones(2, 3)
@@ -12081,8 +12102,8 @@ a")
             x.add_(torch.ones(2, 3))
             return x_view
 
-        self.checkScript(fn, ())
-
+        self.checkScript(fn, (), profiling = False)
+        
     def test_cpp_function_tensor_str(self):
         x = torch.randn(2, 2)
         scale = torch.randn(2, 2, requires_grad=True)

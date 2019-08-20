@@ -222,7 +222,7 @@ class GradientHelper {
       // We insert after the current node because we want to use
       // its output.
       WithInsertPoint insert_guard{node->next()};
-      std::cout << "gradSumToSizeOf:\n";
+      std::cout << "gradSumToSizeOf222:\n";
       std::cout << "fw_output = " << fw_output.value()->debugName() << " type = " << *fw_output.value()->type() << std::endl;
       std::cout << "input = " << node->namedInput(input_name)->debugName() << " type = " << *node->namedInput(input_name)->type() << std::endl;
 
@@ -237,14 +237,21 @@ class GradientHelper {
         IValue ival{};
         if (input_size != output_size)
         {
-          //IValue ival_list_size(input_size);
-          ival = IValue(input_size);
+          size = node->owningGraph()->insertConstant(IValue(input_size), OptionalType::create(ListType::ofInts()));
         }
-        size = node->owningGraph()->insertConstant(ival, OptionalType::create(ListType::ofInts()));
+        else
+        {
+          size = node->owningGraph()->insertConstant(IValue(), OptionalType::create(ListType::ofInts()) /*NoneType::get()*/);
+        }
+
+        std::cout << "int[] is a subtype of int[]? = "  <<  (ListType::ofInts()->isSubtypeOf(OptionalType::create(ListType::ofInts()))) << std::endl;
+        std::cout << "int[]? is subtype of int[] = "  <<  (OptionalType::create(ListType::ofInts())->isSubtypeOf(ListType::ofInts())) << std::endl;
         std::cout << "inserted node = " << *size->node() << std::endl;
       }
       else
       {
+        std::cout << "333444\n";
+        std::cout << "no profiling information to constant fold gradSumToSizeOf\n";
         size = SymbolicVariable(node->namedInput(input_name))
                   .size_if_not_equal(fw_output);
       }
@@ -686,6 +693,79 @@ static void liftConstants(Gradient& grad_desc, ReverseDetails& rev_info) {
   }
 }
 
+
+// Any temporary value from the primal graphs needs to be captured for later use
+// in the reverse graph, to avoid costly recomputations. However, a lot of the
+// nodes we have in our graphs are simply constants, which are cheap to execute
+// and replicate, and so it's better to just copy them into the reverse graph,
+// without polluting the output lists unnecessarily.
+static void constantsizeSizes(Gradient& grad_desc, ReverseDetails& rev_info) {
+
+  static const auto err = [](Value*) -> Value* {
+    throw std::runtime_error("unexpected input");
+  };
+  auto& graph = *grad_desc.f;
+
+  std::cout << "forward:\n";
+  graph.dump();
+  std::cout << "reverse_block:\n"; 
+  std::cout << *rev_info.reverse_block->owningNode();
+  
+  Block* reverse_block = rev_info.reverse_block;
+
+  for (Node* top_node : reverse_block->nodes()) {
+    AT_ASSERT(
+        top_node->kind() == prim::GradOf ||
+        top_node->kind() == prim::AutogradAdd ||
+        top_node->kind() == prim::AutogradZero);
+    if (top_node->kind() != prim::GradOf)
+      continue;
+    Block* grad_body = top_node->blocks().at(0);
+    for (Node* node : grad_body->nodes()) {
+      for (Value* input : node->inputs()) {
+
+        if (input->node()->kind() != aten::_size_if_not_equal)
+        {
+          continue;
+        }
+      
+
+        std::cout << "hit_size_if_not_equal\n";
+        auto ptt_input = input->node()->input(0)->node()->input()->type()->cast<ProfiledTensorType>();
+        auto ptt_output = input->node()->input(1)->node()->input()->type()->cast<ProfiledTensorType>();
+        if (!ptt_input || !ptt_output)
+        {
+          std::cout << "no profiling info on " << input->node()->input(0)->debugName() << std::endl;
+          std::cout << "no profiling info on " << input->node()->input(1)->debugName() << std::endl;
+          continue;
+        }
+        auto input_size = ptt_input->sizes().concrete_sizes();
+        auto output_size = ptt_output->sizes().concrete_sizes();
+
+        if (!input_size || !output_size)
+        {
+          std::cout << "no size information\n";
+          continue;
+        }
+        //insert in front of _grad_sum_to_size
+        WithInsertPoint guard(node);
+        IValue ival{};
+        Value* size;
+        if (input_size != output_size)
+        {
+          size = node->owningGraph()->insertConstant(IValue(input_size), OptionalType::create(ListType::ofInts()));
+        }
+        else
+        {
+          size = node->owningGraph()->insertConstant(IValue(), OptionalType::create(ListType::ofInts()) /*NoneType::get()*/);
+        }
+        std::cout << "Replacing _size_if_not_equal " << input->debugName() << " with " << size->debugName() << std::endl;
+        node->replaceInputWith(input, size);
+      }
+    }
+  }
+}
+
 static void deduplicateSizeCaptures(
     Gradient& grad_desc,
     ReverseDetails& rev_info) {
@@ -744,6 +824,10 @@ static void Optimize(Gradient& grad_desc, ReverseDetails& rev_info) {
   // derivative. I guess a smart analysis could implement this, but I didn't
   // have time before the 1.0 release, so I put this only as a peephole
   // optimization.
+
+  // TODO: see if this pass can be replaced with peephole pass
+
+  constantsizeSizes(grad_desc, rev_info);
   liftConstants(grad_desc, rev_info);
   // We generally add a lot of aten::size calls (for derivatives of broadcasting
   // operators), and they often end up duplicated, and would get captured

@@ -17,10 +17,22 @@ from test_jit import JitTestCase, enable_cpu_fuser, RUN_CUDA, RUN_CUDA_HALF, RUN
     backward_graph, all_backward_graphs, get_lstm_inputs, get_milstm_inputs, LSTMCellC, LSTMCellF, LSTMCellS, MiLSTMCell
 from jit_utils import enable_profiling_mode
 
+
+def strip_profiling_nodes(nodes):
+    profiling_opcodes = set(['prim::BailoutTemplate', 'prim::BailOut'])
+    return [n for n in nodes if n.kind() not in profiling_opcodes]
+
 class TestFuser(JitTestCase):
     def assertAllFused(self, graph, except_for=()):
-        if [n.kind() for n in graph.nodes()] == ['prim::DifferentiableGraph']:
-            graph = next(graph.nodes()).g('Subgraph')
+        print ("kinds : " + str([n.kind() for n in graph.nodes()]))
+
+        diff_graphs = [n for n in graph.nodes() if n.kind() == 'prim::DifferentiableGraph']
+        if len(diff_graphs) > 0:
+            self.assertEqual(len(diff_graphs), 1)
+            print("BEGIN")
+            print(diff_graphs[0])
+            print("END")
+            graph = diff_graphs[0].g('Subgraph')
         allowed_nodes = {'prim::Constant', 'prim::FusionGroup', 'prim::BailoutTemplate', 'prim::BailOut'} | set(except_for)
         self.assertTrue(all(node.kind() in allowed_nodes for node in graph.nodes()),
                         'got {}'.format(graph))
@@ -272,12 +284,13 @@ class TestFuser(JitTestCase):
         b = torch.randn(4, 4, dtype=torch.float, device='cuda')
         nan = torch.tensor(float('nan'), dtype=torch.float, device='cuda')
 
-        funcs = (func2, ) #funcInf, funcOptMin, funcOptMax)
-        for f, inputs in product(funcs, [[a, b]]): # , [a, nan]
+        funcs = (func2, funcInf, funcOptMin, funcOptMax)
+        for f, inputs in product(funcs, [[a, b], [a, nan]]):  
             inp1, inp2 = inputs
             s = self.checkScript(f, (inp1, inp2))
-            #self.assertAllFused(s.graph_for(inp1, inp2), except_for={'aten::size', 'aten::_size_if_not_equal'})
-            print("after checkScript")
+            print ("before assert")
+            self.assertAllFused(s.graph_for(inp1, inp2), except_for={'aten::size', 'aten::_size_if_not_equal'})
+            print("after assert")
             c = s(inp1, inp2)
             with enable_profiling_mode(True):
                 print ("doing backward")
@@ -285,7 +298,8 @@ class TestFuser(JitTestCase):
                 print ("doing second backward")
                 c.sum().backward()
             graph = backward_graph(s)
-            #self.assertAllFused(graph)
+            print ("fused graph " + str(graph))
+            self.assertAllFused(graph)
 
     @unittest.skipIf(not RUN_CUDA, "fuser requires CUDA")
     @skipIfRocm
@@ -535,15 +549,17 @@ class TestFuser(JitTestCase):
 
         b = torch.randn(5, 5, requires_grad=True)
         a = torch.randn(5, 5, requires_grad=True)
-        s = self.checkScript(f, (a, b), profiling=False)
+        s = self.checkScript(f, (a, b))
         self.assertAllFused(s.graph_for(a, b), except_for={'aten::size', 'aten::_size_if_not_equal', 'prim::BroadcastSizes'})
 
         c = s(a, b)
+        # in a profiling run, ga and gb aren't deduplicated
         ga, gb = torch.autograd.grad(c.sum(), [a, b])
+        ga2, gb2 = torch.autograd.grad(c.sum(), [a, b])
         graph = backward_graph(s)
         self.assertAllFused(graph)
         # check that a, b share storage, i.e. were generated as a single output in the fuser
-        self.assertEqual(ga.data_ptr(), gb.data_ptr())
+        self.assertEqual(ga2.data_ptr(), gb2.data_ptr())
 
     @unittest.skipIf(IS_WINDOWS or IS_SANDCASTLE, "NYI: fuser CPU support for Windows or Sandcastle")
     @enable_cpu_fuser
@@ -577,14 +593,19 @@ class TestFuser(JitTestCase):
         b2x2 = box2[:, 2].unsqueeze(0)
         b2y2 = box2[:, 3].unsqueeze(0)
 
-        s = self.checkScript(iou, (b1x1, b1y1, b1x2, b1y2, b2x1, b2y1, b2x2, b2y2), profiling=False)
+        s = self.checkScript(iou, (b1x1, b1y1, b1x2, b1y2, b2x1, b2y1, b2x2, b2y2))
         self.assertAllFused(s.graph_for(b1x1, b1y1, b1x2, b1y2, b2x1, b2y1, b2x2, b2y2),
                             except_for={'aten::size', 'prim::BroadcastSizes', 'aten::_size_if_not_equal'})
 
-        c = s(b1x1, b1y1, b1x2, b1y2, b2x1, b2y1, b2x2, b2y2)
-        torch.autograd.grad(c.sum(), [b1x1, b1y1, b1x2, b1y2, b2x1, b2y1, b2x2, b2y2])
-        graph = backward_graph(s)
-        self.assertAllFused(graph, except_for={'aten::size', 'prim::BroadcastSizes', 'aten::_size_if_not_equal'})
+        with enable_profiling_mode(True):
+            c = s(b1x1, b1y1, b1x2, b1y2, b2x1, b2y1, b2x2, b2y2)
+            print ("doing first backward")
+            torch.autograd.grad(c.sum(), [b1x1, b1y1, b1x2, b1y2, b2x1, b2y1, b2x2, b2y2])
+            print ("doing second backward")
+            torch.autograd.grad(c.sum(), [b1x1, b1y1, b1x2, b1y2, b2x1, b2y1, b2x2, b2y2])
+            print ("backward graph")
+            graph = backward_graph(s)
+            self.assertAllFused(graph, except_for={'aten::size', 'prim::BroadcastSizes', 'aten::_size_if_not_equal'})
 
     @unittest.skipIf(not RUN_CUDA, "fuser requires CUDA")
     @unittest.skipIf(not RUN_CUDA_MULTI_GPU, "needs non-zero device")
@@ -655,18 +676,25 @@ class TestFuser(JitTestCase):
     @skipIfRocm
     def test_lstm_cuda(self):
         inputs = get_lstm_inputs('cuda', training=True)
-        module = self.checkScript(LSTMCellS, inputs, profiling=False)
+        module = self.checkScript(LSTMCellS, inputs)
         forward_graph = module.graph_for(*inputs)
         self.assertGraphContainsExactly(
             forward_graph, 'prim::FusionGroup', 1, consider_subgraphs=True)
-        self.assertTrue(len(list(forward_graph.nodes())) == 2)
+        self.assertTrue(len(strip_profiling_nodes(forward_graph.nodes())) == 2)
         # Everything is differentiable but TupleConstruct return
         FileCheck().check("DifferentiableGraph").check_next("TupleConstruct") \
             .check_next("return").run(str(forward_graph))
 
-        hy, cy = module(*inputs)
-        (hy + cy).sum().backward()
-        backward = backward_graph(module)
+        with enable_profiling_mode(True):
+            hy, cy = module(*inputs)
+            summ = (hy + cy).sum()
+            print("doing first backward")
+            summ.backward()
+            print("doing second backward")
+            summ.backward()
+            backward = backward_graph(module)
+            print ("BBBACK")
+            print (str(backward))
         self.assertAllFused(backward, except_for=("aten::t", "aten::mm",
                                                   "aten::_grad_sum_to_size"))
 
@@ -734,7 +762,7 @@ class TestFuser(JitTestCase):
     @skipIfRocm
     def test_milstm_cuda(self):
         inputs = get_milstm_inputs('cuda', training=True)
-        module = self.checkScript(MiLSTMCell, inputs, profiling=False)
+        module = self.checkScript(MiLSTMCell, inputs)
         forward_graph = module.graph_for(*inputs)
         print(str(forward_graph))
         self.assertGraphContainsExactly(
@@ -742,6 +770,7 @@ class TestFuser(JitTestCase):
         FileCheck().check("DifferentiableGraph").check_next("TupleConstruct") \
             .check_next("return").check("FusionGroup").run(str(forward_graph))
         hy, cy = module(*inputs)
+        (hy + cy).sum().backward()
         (hy + cy).sum().backward()
 
     @unittest.skipIf(not RUN_CUDA, "fuser requires CUDA")
@@ -894,10 +923,20 @@ class TestFuser(JitTestCase):
         s1 = torch.randn(5, 1, requires_grad=True, device='cuda')
         s2 = torch.randn(5, 5, requires_grad=True, device='cuda')
 
-        module = self.checkScript(my_broadcasted_cell, (s1, s1, s1), profiling=False)
+        module = self.checkScript(my_broadcasted_cell, (s1, s1, s1))
         forward_graph = module.graph_for(s1, s1, s1)
         self.assertAllFused(forward_graph, except_for=("aten::size", "prim::BroadcastSizes",
                                                        "aten::_size_if_not_equal"))
+
+
+        # TODO: Note, no with enable_profiling_mode(True) since this test triggers bailouts
+        # and as of know we don't have python API to get BailOut's grad_executors
+
+
+        fwd = module(s1, s1, s1)
+        args = [a.detach_().requires_grad_() for a in [s1, s1, s1]]
+        torch.autograd.grad(fwd.sum(), args)
+        torch.autograd.grad(fwd.sum(), args)
 
         old_plans = set()
         for i in range(3):
@@ -916,8 +955,55 @@ class TestFuser(JitTestCase):
                     assert backward is None
                     backward = g
                     old_plans.add(str(backward))
-            self.assertEqual(len([1 for o in backward.outputs() if o.node().kind() == "aten::_grad_sum_to_size"]), i)
-            self.assertEqual(len([1 for o in backward.outputs() if o.node().kind() == "prim::Param"]), 3 - i)
+
+            print ("i = ", i)
+            print (str(backward))
+            # for now we only check the very first case where all inputs have  the same shapes, so no _grad_sum_to_size
+            # when we add an ability to collect bailout executors we should be able to check all the graphs
+            if i < 1:
+                self.assertEqual(len([1 for o in backward.outputs() if o.node().kind() == "aten::_grad_sum_to_size"]), i)
+                for o in backward.outputs():
+                    print("output:")
+                    print (str(o))
+                self.assertEqual(len([1 for o in backward.outputs() if o.node().inputsAt(1).node().kind() == "prim::Param"]), 3 - i)
+
+        # print ("after forward")
+        # with enable_profiling_mode(True):
+        #     old_plans = set()
+        #     for i in range(3):
+        #         # if we have s2, then the s1 are _grad_sum_to_size'd
+        #         args = s2 if i < 1 else s1, s2 if i < 2 else s1, s2
+        #         args = [a.detach_().requires_grad_() for a in args]
+
+        #         print("=======================================================")
+        #         print("a = ", (s2 if i < 1 else s1).size())
+        #         print("b = ", (s2 if i < 2 else s1).size())
+        #         print("c = ", s2.size())
+        #         print ("i = ", i)
+        #         res = module(s2 if i < 1 else s1, s2 if i < 2 else s1, s2)
+        #         res = module(s2 if i < 1 else s1, s2 if i < 2 else s1, s2)
+        #         print ("doing first backward")
+        #         grads = torch.autograd.grad(res.sum(), args)
+        #         print ("doing second backward")
+        #         grads = torch.autograd.grad(res.sum(), args)
+        #         for inp, gr in zip(args, grads):
+        #             self.assertEqual(inp.shape, gr.shape)
+        #         backward = None
+
+                # this is a workaround for the backward graphs not being
+                # in order for Python 2
+
+                # for g in all_backward_graphs(module):
+                #     if str(g) not in old_plans:
+                #         assert backward is None
+                #         backward = g
+                #         old_plans.add(str(backward))
+                #     
+
+                # backward = backward_graph(module)
+                # print( str(backward))
+                #self.assertEqual(len([1 for o in backward.outputs() if o.node().kind() == "aten::_grad_sum_to_size"]), i)
+                #self.assertEqual(len([1 for o in backward.outputs() if o.node().kind() == "prim::BailOut"]), 3 - i)
 
 
 if __name__ == '__main__':

@@ -52,7 +52,7 @@ struct TORCH_API Function {
   }
 
   // if this isn't yet defined, run its method_creator function
-  void ensure_defined();
+  void ensure_defined(bool multiple_output = false);
 
   size_t num_inputs() const {
     return graph()->inputs().size();
@@ -78,7 +78,7 @@ struct TORCH_API Function {
   }
 
   GraphExecutorState getDebugState() {
-    return get_executor().getDebugState();
+    return get_executor(true).getDebugState();
   }
 
   bool is_optimized() const {
@@ -91,10 +91,13 @@ struct TORCH_API Function {
         "Method (but not graphs in general) require a single output. Use None/Tuple for 0 or 2+ outputs");
   }
 
-  GraphExecutor& get_executor() {
-    ensure_defined();
-    std::call_once(executor_init_, [&] {
-      check_single_output();
+  GraphExecutor& get_executor(bool multiple_output = false) {
+    ensure_defined(multiple_output);
+    std::call_once(executor_init_, [&, multiple_output] {
+      if (!multiple_output)
+      {
+        check_single_output();
+      }
       executor_ = GraphExecutor(graph(), optimize_);
     });
     return executor_;

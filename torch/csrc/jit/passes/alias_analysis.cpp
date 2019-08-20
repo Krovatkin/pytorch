@@ -1217,7 +1217,24 @@ void AliasDb::setWildcard(const Value* v) {
   }
   auto e = getOrCreateWildcard(v->type());
   TORCH_INTERNAL_ASSERT(e != nullptr);
-  GRAPH_DEBUG("Mapping ", v->debugName(), " to ", e);
+
+  std::string eltDebugName;
+  if (e->value == nullptr) {
+    // not the most efficient way, but given the fact there are
+    // not too many types and even fewer of them will end up in
+    // wildcardIndex_, we should be fine with a linear search
+    // each time we hit a wildcard leaf
+    eltDebugName = "WILDCARD";
+    for (const auto& ent : wildcardIndex_) {
+      if (ent.second == e) {
+        eltDebugName = std::string("WILDCARD for type ") + typeKindToString(ent.first);
+      }
+    }
+  } else {
+    eltDebugName = e->value->debugName();
+  }
+
+  GRAPH_DEBUG("Mapping ", v->debugName(), " to ", eltDebugName);
   memoryDAG_->makePointerTo(getOrCreateElement(v), e);
 }
 

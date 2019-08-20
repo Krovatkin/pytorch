@@ -18,7 +18,7 @@
 namespace torch {
 namespace jit {
 
-thread_local bool profiling_mode = false;
+static bool profiling_mode = false;
 bool& getProfilingMode() {
   return profiling_mode;
 }
@@ -33,10 +33,15 @@ std::shared_ptr<Graph> ProfilingGraphExecutorImpl::prepareGraph(
 ProfilingGraphExecutorImpl::ProfilingGraphExecutorImpl(
     const std::shared_ptr<Graph>& graph,
     bool optimize)
-    : GraphExecutorImplBase(graph, optimize), arg_spec_creator_(*this->graph) {}
+    : GraphExecutorImplBase(graph, optimize), arg_spec_creator_(*this->graph) 
+    {
+      std::cout << "created ProfilingGraphExecutorImpl " << this << std::endl;
+    }
 
 ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(Stack& stack) {
+  std::cout << "in ProfilingGraphExecutorImpl::getPlanFor " << this << std::endl;
   if (optimized_plan_) {
+    std::cout << "returning optimized_plan for " << this << std::endl;
     return *optimized_plan_;
   }
 
@@ -44,18 +49,9 @@ ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(Stack& stack) {
     pr_ = ProfilingRecord::instrumentGraph(prepareGraph(graph, stack));
     auto copy = pr_->graph()->copy();
     // to lower GradOf
-    std::cout << "before setting profling to 1\n";
-    std::cout << "before running runRequiredPasses for profiled graph\n";
-    std::cout << "getProfilingMode() = " << getProfilingMode() << std::endl;
-    std::cout << "getProfilingMode() = " << & (getProfilingMode()) << std::endl;
     copy->dump();
-    getProfilingMode() = 1;
-    std::cout << "after setting profiling to 1";
-    std::cout << "before running runRequiredPasses for profiled graph\n";
     std::cout << "getProfilingMode() = " << getProfilingMode() << std::endl;
-    std::cout << "getProfilingMode() = " << & (getProfilingMode()) << std::endl;
     //runRequiredPasses(copy);
-    
     LowerGradOf(*copy);
     std::cout << "after LowerGradOf\n";
     copy->dump();
@@ -63,10 +59,6 @@ ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(Stack& stack) {
     CanonicalizeOps(copy);
     EliminateDeadCode(copy);
     profiling_plan_ = ExecutionPlan(copy);
-    getProfilingMode() = 0;
-    std::cout << "before running runRequiredPasses for profiled graph\n";
-    std::cout << "getProfilingMode() = " << getProfilingMode() << std::endl;
-    std::cout << "getProfilingMode() = " << & (getProfilingMode()) << std::endl;
     std::cout << "setting profiling_plan_ for " << this << std::endl;
     copy->dump();
     // fall-through
@@ -77,8 +69,6 @@ ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(Stack& stack) {
     return *profiling_plan_;
   }
   // copy already has differentiableGraphs
-  bool old_profiling = getProfilingMode();
-  getProfilingMode() = true;
   auto copy = pr_->graph()->copy();
   // insert bailouts
   InsertGuards(copy);
@@ -97,9 +87,11 @@ ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(Stack& stack) {
     for (Node* dnode : diff_nodes) {
       auto diff_graph = std::move(dnode->g(attr::Subgraph));
       Gradient gradient = differentiate(diff_graph);
-      // do not optimize DifferentiableGraphs, since
-      // ideally they will be profiled and then optimized separetely
-      // when their corresponding DifferentiableGraphOp is called
+      std::cout << "gradient.f = \n";
+      gradient.f->dump();
+      runOptimization(gradient.f);
+       // run non diff optimization on the forward graph
+      runNondiffOptimization(gradient.f);
       packGradient(gradient, dnode);
     }
     InlineAutodiffSubgraphs(
@@ -110,7 +102,6 @@ ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(Stack& stack) {
   runOptimization(copy);
   runNondiffOptimization(copy);
   EliminateDeadCode(copy);
-  getProfilingMode() = old_profiling;
   // cache
   optimized_plan_ = ExecutionPlan(copy);
   std::cout << "setting optimized_plan for " << this << std::endl;
@@ -122,7 +113,14 @@ ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(Stack& stack) {
 
 GraphExecutorState ProfilingGraphExecutorImpl::getDebugState() {
   GraphExecutorState state;
-  std::cout << "getting optimized_plan for " << this << std::endl;
+
+  std::cout << "graph in debugstate\n";
+  graph->dump();
+  if (this->pr_)
+  {
+    std::cout << "pr_ set\n";
+  }
+  std::cout << "getDebugState: optimized_plan for " << this << std::endl;
   TORCH_INTERNAL_ASSERT(optimized_plan_);
   auto opt_plan = *optimized_plan_;
   state.execution_plans.emplace(ArgumentSpec{0, 0}, opt_plan);

@@ -22,12 +22,8 @@ void specializeAutogradZero(Graph& g, bool in_profiling_mode) {
     } else if (tp->isSubtypeOf(TensorType::get())
                 || tp->isSubtypeOf(ListType::ofTensors())) {
 
-      // std::cout << "processing type = " << *tp << std::endl;
-      // std::cout << "getProfilingMode = " << getProfilingMode() << std::endl;
-      std::cout << "getProfilingMode() = " << getProfilingMode() << std::endl;
-      std::cout << "getProfilingMode() = " << & (getProfilingMode()) << std::endl;
-      //state[input] = getProfilingMode() && !tp->cast<ProfiledTensorType>() ? State::Unknown : State::Nonzero;
       state[input] = getProfilingMode() ? State::Unknown : State::Nonzero;
+      std::cout << "getProfilingMode() = " << getProfilingMode() << std::endl;
       std::cout << "state[input] = " << (int)state[input] << std::endl;
     } else {
       state[input] = State::Unknown;
@@ -66,12 +62,6 @@ void specializeAutogradZero(Graph& g, bool in_profiling_mode) {
             // where we do not know if a value is Nonzero since at the top level
             // a gradient graph is composed of Linear nodes and AutogradAdds
             // and LinearNodes only appear in these graphs
-
-            if (state[input] == State::Unknown)
-            {
-              std::cout << "input " << input->debugName() << " is unknown!!!\n";
-            }
-            //AT_ASSERT(state[input] != State::Unknown /* || getProfilingMode()*/);
             AT_ASSERT(state[input] != State::Unknown);
           }
           // hoist the nodes in the GradOf body to be before the linear block
@@ -86,8 +76,6 @@ void specializeAutogradZero(Graph& g, bool in_profiling_mode) {
         it.destroyCurrent();
       } break;
       case prim::AutogradAdd: {
-        std::cout << "start AADD\n";
-        std::cout << *n;
         auto a = n->input(0);
         auto b = n->input(1);
         // if one is Autograd zero, we can just drop the add
@@ -108,14 +96,7 @@ void specializeAutogradZero(Graph& g, bool in_profiling_mode) {
           state[new_add] = State::Nonzero;
           n->output()->replaceAllUsesWith(new_add);
           it.destroyCurrent();
-        } 
-        // else if (getProfilingMode() && a->type()->isSubtypeOf(TensorType::get()) && b->type()->isSubtypeOf(TensorType::get())) {
-        //   std::cout << "before aadd\n";
-        //   std::cout << *n;
-        //   state[n->output()] = State::Nonzero;
-        //   std::cout << "after aadd\n";
-        // } 
-        else {
+        } else {
           // otherwise we have conditionally-Nonzero things, and we need
           // to actually run an AutogradAdd which will guard for Zeros
           // so we leave the op as is

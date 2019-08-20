@@ -449,7 +449,7 @@ struct CAFFE2_API VaryingShape {
 
   bool operator ==(const VaryingShape &other) const
   {
-    return size_ == other.size_ && dims_ == dims_;
+    return size_ == other.size_ && dims_ == other.dims_;
   }
 
   const c10::optional<int64_t>& operator [] (int i) const
@@ -559,18 +559,7 @@ struct CAFFE2_API ProfiledTensorType : public TensorType {
     return requires_grad_ ? *requires_grad_ : false;
   }
 
-  bool operator==(const Type& rhs) const override {
-    if(rhs.kind() != kind())
-    {
-      return false;
-    }
-
-    auto rt = rhs.expect<ProfiledTensorType>();
-    return scalar_type_ == rt->scalarType() &&
-           sizes() == rt->sizes() &&
-           strides() == rt->strides() &&
-           device() == rt->device();
-  }
+  bool operator==(const Type& rhs) const override;
   bool isSubtypeOf(const TypePtr rhs) const override {
     if (rhs->kind() == TypeKind::ProfiledTensorType)
       return *expect<ProfiledTensorType>() == *rhs;

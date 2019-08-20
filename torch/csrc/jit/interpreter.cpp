@@ -654,6 +654,8 @@ struct CodeImpl {
 
     auto build_bailout_graph = [bailout_index,
                                 unoptimized_graph](Function& func) {
+      
+      std::cout << "BailOut built!\n";
       BuildBailOutGraphFrom(bailout_index, unoptimized_graph, func.graph());
     };
 
@@ -1007,6 +1009,9 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
             {
               auto actual = ProfiledTensorType::create(stack.back().toTensor());
               const TypePtr& expected = af.types[inst.X];
+              std::cout << "running guard:\n";
+              std::cout << "actual = " << *actual << std::endl;
+              std::cout << "expected = " << *expected << std::endl;
               push(stack, *expected == *actual);
             }
             else
@@ -1018,9 +1023,11 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
             ++af.pc;
           } break;
           case TAIL_CALL: {
-            af.functions[inst.X]->ensure_defined();
+            std::cout << "BailOut triggered!\n";
+            // multiple outputs should be okay
+            af.functions[inst.X]->ensure_defined(/*multiple_output=*/true);
             const Code& code =
-                af.functions[inst.X]->get_executor().getPlanFor(stack).code;
+                af.functions[inst.X]->get_executor(true).getPlanFor(stack).code;
             size_t num_inputs = code.num_inputs();
             size_t base_pointer = frames.back().base_pointer;
             TORCH_INTERNAL_ASSERT(stack.size() >= num_inputs);

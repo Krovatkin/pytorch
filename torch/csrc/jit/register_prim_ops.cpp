@@ -758,7 +758,7 @@ RegisterOperators reg(
          }),
      Operator(
          //prim::AutogradAnyNonZero,
-         "prim::AutogradAnyNonZero(Tensor(a) t) -> int",
+         "prim::AutogradAnyNonZero(...) -> int",
          [](const Node* node) {
            size_t num_inputs = node->inputs().size();
            return [=](Stack& stack) {

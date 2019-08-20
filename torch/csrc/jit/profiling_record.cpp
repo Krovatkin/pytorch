@@ -44,14 +44,7 @@ static void unprofileBlock(Block* block)
   }
 }
 
-void ProfilingRecord::instrumentBlock(Block* block) {
-  for (auto it = block->nodes().begin(); it != block->nodes().end(); ++it) {
-    auto n = *it;
-    for (auto i : n->inputs()) {
-      if (!i->type()->isSubclass(TypeKind::TensorType) ||
-          i->node()->kind() == prim::profile) {
-        continue;
-      }
+void ProfilingRecord::insertShapeProfile(Node* n, Value* i) {
 
       auto pn = createProfileNode(nullptr, {i});
       auto pno = pn->addOutput();
@@ -69,8 +62,10 @@ void ProfilingRecord::instrumentBlock(Block* block) {
             if (pno->type()->isSubclass(TypeKind::ProfiledTensorType)) {
               auto type = pno->type()->cast<ProfiledTensorType>();
               std::cout << "pno undefined  = " << type->is_undefined_grad_tensor() << std::endl;
-              std::cout << "pttp = " << pttp->is_undefined_grad_tensor() << std::endl;
-              pno->setType(type->merge(pttp));
+              std::cout << "pttp = " << pttp << " " << *pttp << std::endl;
+              auto merged = type->merge(pttp);
+              std::cout << "merged = " << merged << " " << *merged << std::endl;
+              pno->setType(merged);
             } else {
               pno->setType(pttp);
             }
@@ -89,6 +84,18 @@ void ProfilingRecord::instrumentBlock(Block* block) {
       pn->setCallback(shape_profiler);
       pn->insertBefore(n);
       n->replaceInputWith(i, pn->output());
+}
+
+void ProfilingRecord::instrumentBlock(Block* block) {
+  for (auto it = block->nodes().begin(); it != block->nodes().end(); ++it) {
+    auto n = *it;
+    for (auto i : n->inputs()) {
+      if (!i->type()->isSubclass(TypeKind::TensorType) ||
+          i->node()->kind() == prim::profile) {
+        continue;
+      }
+
+      insertShapeProfile(n, i);
     }
 
     for (auto b : n->blocks()) {
@@ -108,6 +115,14 @@ std::unique_ptr<ProfilingRecord> ProfilingRecord::instrumentGraph(
   std::cout << "after unprofiling\n";
   new_g->dump();
   pr->instrumentBlock(new_g->block());
+
+
+
+  std::cout << "return node = " << *new_g->return_node() << std::endl;
+
+  for (auto i : new_g->return_node()->inputs()) {
+    pr->insertShapeProfile(new_g->return_node(), i);
+  }
   std::function<void(Stack&)> counter = [raw_pr](Stack&) {
     std::lock_guard<std::mutex> lock(raw_pr->mutex_);
     if (raw_pr->profiling_count_ > 0)

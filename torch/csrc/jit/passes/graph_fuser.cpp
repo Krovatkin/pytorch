@@ -212,7 +212,7 @@ struct GraphFuser {
     // are not necessarily correct.
     if (node->owningBlock() != block_)
       return false;
-    if (node->kind() == aten::_grad_sum_to_size && !getProfilingMode()) {
+    if (node->kind() == aten::_grad_sum_to_size) {
       // We only fuse _grad_sum_to_size if
       // - we will fuse its input next (checked here)
       // - we can commute the _grad_sum_to_size with everything
@@ -358,7 +358,11 @@ struct GraphFuser {
             (input->type()->isSubtypeOf(FloatType::get()) &&
              input->node()->kind() != prim::Constant) ||
             (n->kind() == aten::_grad_sum_to_size &&
-             input->type()->isSubtypeOf(ListType::ofInts()))) {
+             
+             (input->type()->isSubtypeOf(ListType::ofInts()) 
+              || input->type()->isSubtypeOf(OptionalType::create(ListType::ofInts()) ))
+
+             )) {
           auto in_group = subgraph.addInput();
           in_group->setType(input->type());
           inputs_map[input] = in_group;

@@ -649,4 +649,20 @@ std::string TupleType::python_str() const {
   return ss.str();
 }
 
+bool ProfiledTensorType::operator==(const Type& rhs) const {
+    if(rhs.kind() != kind())
+    {
+      return false;
+    }
+
+    
+    auto rt = rhs.expect<ProfiledTensorType>();
+    std::cout << "comparing sizes = " << (sizes() == rt->sizes()) << std::endl;
+    return scalar_type_ == rt->scalarType() &&
+           sizes() == rt->sizes() &&
+           strides() == rt->strides() &&
+           device() == rt->device();
+           
+}
+
 } // namespace c10

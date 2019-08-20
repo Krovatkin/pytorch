@@ -313,7 +313,10 @@ struct DifferentiableGraphOp {
         grad(std::move(grad)),
         grad_executor(this->grad.df),
         num_inputs(this->grad.f->inputs().size()),
-        num_outputs(this->grad.f->outputs().size()) {}
+        num_outputs(this->grad.f->outputs().size()) 
+        {
+          std::cout << "created grad_executor " << &this->grad_executor << std::endl;
+        }
 
   // XXX: keep in mind that stack can be larger than the inputs we need!
   int operator()(Stack& stack) const {
@@ -431,18 +434,11 @@ Gradient getGradient(const Node* n) {
 
 RegisterOperators reg_graph_executor_ops(
     {Operator(prim::DifferentiableGraph, [](const Node* n) -> Operation {
-      if (n->hasAttribute(attr::training))
-      {
-        std::cout << "has profiling attribute\n";
-        getProfilingMode() = 1;
-        auto dgop =  DifferentiableGraphOp(getGradient(n));
-        getProfilingMode() = 0;
-        return dgop;
-      }
-      std::cout << "in DiffferentiableGraph\n";
-      std::cout << "getProfilingMode() = " << &(getProfilingMode()) << std::endl;
       std::cout << "getProfilingMode() = " << getProfilingMode() << std::endl;
-      return DifferentiableGraphOp(getGradient(n));
+      auto dgop = DifferentiableGraphOp(getGradient(n));
+      // Operation op(dgop)
+      // std::cout << detail::getGradExecutor()
+      return dgop;
     })});
 
 namespace detail {
@@ -631,6 +627,7 @@ GraphExecutorState GraphExecutor::getDebugState() {
 
 void runRequiredPasses(const std::shared_ptr<Graph>& g) {
   std::cout << "before specializeAutogradZero:\n";
+  std::cout << "getProfilingMode = " << getProfilingMode() << std::endl;
   g->dump();
   specializeAutogradZero(*g);
   LowerGradOf(*g);
@@ -645,7 +642,6 @@ void runRequiredPasses(const std::shared_ptr<Graph>& g) {
 
 void packGradient(const Gradient& gradient, Node* dnode) {
   AT_ASSERT(dnode->kind() == prim::DifferentiableGraph);
-  dnode->i_(attr::training, 1);
   dnode->g_(attr::Subgraph, gradient.f)
       ->g_(attr::ReverseSubgraph, gradient.df)
       ->i_(attr::f_real_outputs, gradient.f_real_outputs)
