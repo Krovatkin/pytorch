@@ -1,14 +1,14 @@
-#include <torch/csrc/jit/graph_executor.h>
-
 #include <ATen/core/ivalue.h>
 #include <c10/util/Exception.h>
 #include <torch/csrc/autograd/grad_mode.h>
 #include <torch/csrc/jit/argument_spec.h>
 #include <torch/csrc/jit/autodiff.h>
 #include <torch/csrc/jit/custom_operator.h>
+#include <torch/csrc/jit/graph_executor.h>
 #include <torch/csrc/jit/graph_executor_impl.h>
 #include <torch/csrc/jit/interpreter.h>
 #include <torch/csrc/jit/ir.h>
+#include <torch/csrc/jit/jit_log.h>
 #include <torch/csrc/jit/pass_manager.h>
 #include <torch/csrc/jit/passes/batch_mm.h>
 #include <torch/csrc/jit/passes/canonicalize_ops.h>
@@ -688,10 +688,25 @@ bool needsGradient(const std::shared_ptr<const Graph>& graph) {
     return false;
   if (mayIntroduceGradient(graph->block()))
     return true;
-  for (const Value* input : graph->inputs()) {
-    if (input->type()->requires_grad())
-      return true;
+
+  if (getProfilingMode()) {
+    for (const Value *input : graph->inputs()) {
+      for (const auto &use : input->uses()) {
+        if (use.user->kind() == prim::BailOut) {
+          auto ptt = use.user->output()->type()->expect<TensorType>();
+          if (ptt->requiresGrad() && *ptt->requiresGrad()) {
+            return true;
+          }
+        }
+      }
+    }
+  } else {
+    for (const Value *input : graph->inputs()) {
+      if (input->type()->requires_grad())
+        return true;
+    }
   }
+
   return false;
 }
 
