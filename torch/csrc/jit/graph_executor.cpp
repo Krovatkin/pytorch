@@ -216,7 +216,7 @@ struct DifferentiableGraphBackward : public autograd::Node {
       c10::optional<GraphExecutor>& grad_executor)
       : captures_(capture_size),
         input_instructions_(input_size),
-        unspecialized_graph_(unspec_graph),
+        unspecialized_graph_(unspec_graph->copy()),
         grad_executor_(grad_executor) {}
 
   variable_list apply(variable_list&& inputs) override {
@@ -266,14 +266,25 @@ struct DifferentiableGraphBackward : public autograd::Node {
   }
 
 
-  static c10::TensorTypePtr getTensorType(bool defined) {
-    auto tensor_type = TensorType::get();
+  static c10::TensorTypePtr getTensorType(int defined) {
+    const size_t REQ = 0x1;
+    const size_t DEF = 0x2;
+    // requires gradient but undefined should be impossible
+    TORCH_INTERNAL_ASSERT(defined != REQ);
+    auto tensor_type = TensorType::create(c10::nullopt, c10::nullopt, c10::VaryingShape{}, 
+    c10::VaryingStrides{}, {defined & REQ}, {defined & DEF});
 
-    if (defined) {
-      return tensor_type;
-    }
+    return tensor_type;
+  }
 
-    return tensor_type->withUndefined();
+  int getDefReq(const at::Tensor& t) {
+    int hash = 0;
+    static size_t REQ = 0x0;
+    static size_t DEF = 0x1;
+
+    hash = static_cast<int>(t.requires_grad()) << REQ | 
+      static_cast<int>(t.defined()) << DEF;
+    return hash;
   }
 
   GraphExecutor& getExecutor(Stack& stack) {
@@ -281,17 +292,18 @@ struct DifferentiableGraphBackward : public autograd::Node {
     // tensor lists are hashed as a single boolean value
     // since all tensors will be either defined or undefined
 
-    std::vector<bool> hash;
+    std::vector<int> hash;
 
     for (IValue& v : stack) {
       if (v.isTensorList()) {
         auto list = v.toTensorListRef();
-        hash.push_back(list.size() > 0 ? list[0].defined() : true);
+
+        hash.push_back(getDefReq(list[0]));
       } else if (v.isTensor()) {
-        hash.push_back(v.toTensor().defined());
+        hash.push_back(getDefReq(v.toTensor()));
       } else {
-        // assume that every other type is defined
-        hash.push_back(true);
+        // doesn't matter much for other types
+        hash.push_back(0);
       }
     }
 
@@ -303,7 +315,7 @@ struct DifferentiableGraphBackward : public autograd::Node {
     std::shared_ptr<Graph> spec_copy = unspecialized_graph_->copy();
     for (auto i = 0; i < hash.size(); i++) {
       auto input_type = spec_copy->inputs().at(i);
-      bool defined = hash[i];
+      int defined = hash[i];
       if (input_type->type()->kind() == TensorType::Kind) {
         input_type->setType(getTensorType(defined));
       } else if (
@@ -385,7 +397,7 @@ struct DifferentiableGraphBackward : public autograd::Node {
   GraphExecutor executor;
   CaptureList captures_;
   UnpackInstructions input_instructions_;
-  std::unordered_map<std::vector<bool>, GraphExecutor> grad_executors_;
+  std::map<std::vector<int>, GraphExecutor> grad_executors_;
   std::shared_ptr<Graph> unspecialized_graph_;
   c10::optional<GraphExecutor>& grad_executor_;
 };
