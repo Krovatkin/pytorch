@@ -4,6 +4,7 @@
 #include <torch/csrc/jit/script/error_report.h>
 
 #include <asmjit/asmjit.h>
+#include <torch/csrc/jit/jit_log.h>
 
 namespace torch {
 namespace jit {
@@ -866,10 +867,10 @@ std::unordered_map<Symbol, void (*)(Node*, asmjit::x86::Compiler&, ValueMap&)>
                  {at::scalar::_float, EmitCastToFloat},
                  {at::scalar::LinearIndexedWrite, EmitLinearIndexedWrite}};
 
-static void dumpCode(asmjit::BaseBuilder& cb) {
+std::string dumpCode(asmjit::BaseBuilder &cb) {
   asmjit::String sb;
   cb.dump(sb);
-  printf("%s\n", sb.data());
+  return std::string(sb.data());
 }
 
 //!!!!!!! TODO !!!!!!
@@ -922,9 +923,7 @@ void Emitx86(const std::shared_ptr<Graph>& graph) {
 
   cc.endFunc();
   cc.finalize();
-
-  dumpCode(cc);
-
+  GRAPH_DEBUG("x86: \n", dumpCode(cc));
   // REMOVE
 
   auto a = at::rand({3, 4});
@@ -973,24 +972,28 @@ void Emitx86(const std::shared_ptr<Graph>& graph) {
 void LoopFuser(const std::shared_ptr<Graph>& graph) {
   auto lowered_graph = graph->copy();
 
-  std::cout << *graph << std::endl;
-
+  GRAPH_DUMP("Original Graph:", lowered_graph);
   LowerNodes(lowered_graph);
+  GRAPH_DUMP("After Lowering:", lowered_graph);
   while (EliminateIdentity(lowered_graph->block()))
     ;
+  GRAPH_DUMP("EliminateIdentity:", lowered_graph);
   PropagateScalarTypes(lowered_graph);
   FuseElementWise(lowered_graph);
+  GRAPH_DUMP("FuseElementWise:", lowered_graph);
   PrebroadcastInputs(lowered_graph);
+  GRAPH_DUMP("After PrebroadcastInputs:", lowered_graph);
   ExpandLoopNest(lowered_graph);
+  GRAPH_DUMP("Fuse ElementWise:", lowered_graph);
   while (EliminateIdentity(lowered_graph->block()))
     ;
   ConstantNodeDCE(lowered_graph->block());
   LICM(lowered_graph->block());
+  GRAPH_DUMP("After LCIM:", lowered_graph);
   ExtractInputs(lowered_graph);
   StripPreExpand(lowered_graph->block());
 
-  std::cout << *lowered_graph << "\n";
-
+  GRAPH_DUMP("Graph before emitting:", lowered_graph);
   Emitx86(lowered_graph);
 }
 
