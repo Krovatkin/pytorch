@@ -31,6 +31,8 @@ static std::atomic<bool> executor_mode{true};
 static std::atomic<bool> profiling_mode{true};
 #endif
 
+static std::atomic<size_t> num_profiled_runs{1};
+static std::atomic<size_t> bailout_depth{1};
 
 std::atomic<bool>& getProfilingMode() {
   return profiling_mode;
@@ -38,6 +40,17 @@ std::atomic<bool>& getProfilingMode() {
 std::atomic<bool>& getExecutorMode() {
   return executor_mode;
 }
+
+std::atomic<size_t>& getNumProfiledRuns() {
+  return num_profiled_runs;
+}
+
+std::atomic<size_t>& getBailoutDepth() {
+  return bailout_depth;
+}
+
+TORCH_API std::atomic<size_t>& getNumProfilingRuns();
+TORCH_API std::atomic<size_t>& getBailoutChainDepth();
 
 static bool needsGradientInProfilingMode(Block* b) {
   for (auto n : b->nodes()) {
