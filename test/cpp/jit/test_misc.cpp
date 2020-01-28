@@ -1063,6 +1063,39 @@ static void checkShape(
   ASSERT_EQ(ptp->sizes().concrete_sizes().value(), expected);
 }
 
+void testVaryingShapes() {
+  static const auto basic_example = R"JIT(
+  def basic(x, y):
+    a = x + y
+    return a
+  )JIT";
+
+  auto cu = compile(basic_example);
+  auto& fun = cu->get_function("basic");
+  getNumProfiledRuns() = 2;
+  auto pr = ProfilingRecord::instrumentGraph(fun.graph());
+  auto x = at::randn({2, 3}, at::kCPU);
+  auto y = at::randn({8, 3}, at::kCPU);
+  auto stack_x = createStack({x, x});
+  auto stack_y = createStack({y, y});
+  // introduce some profiling information
+  Code cd(pr->profiled_graph_);
+  InterpreterState is{cd};
+  is.run(stack_x);
+  std::cout << "after the first profiled run\n";
+  pr->profiled_graph_->dump();
+  auto profiled_x = *(++pr->profiled_graph_->nodes().begin());
+  std::cout << "profiled_x =" << *profiled_x << std::endl;
+  auto profiled_type = profiled_x->output()->type()->expect<TensorType>();
+  std::cout << "0th dim, dynamic: " << !profiled_type->sizes()[0].has_value()
+            << ", value: " << profiled_type->sizes()[0].value() << std::endl;
+  std::cout << "0th dim, dynamic: " << !profiled_type->sizes()[1].has_value()
+            << ", value: " << profiled_type->sizes()[1].value() << std::endl;
+  is.run(stack_y);
+  std::cout << "after the second profiled run\n";
+  pr->profiled_graph_->dump();
+}
+
 void testInsertAndEliminateRedundantGuards() {
   static const auto basic_example = R"JIT(
   def basic(x, y):
