@@ -19,6 +19,7 @@
 #include <torch/csrc/jit/runtime/instruction.h>
 #include <torch/csrc/jit/runtime/jit_exception.h>
 #include <torch/csrc/jit/runtime/operator.h>
+#include <torch/csrc/jit/runtime/profiling_record.h>
 #include <torch/csrc/jit/runtime/vararg_functions.h>
 
 #ifdef USE_DISTRIBUTED
@@ -954,6 +955,7 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
     Function** functions;
     std::function<void(std::vector<IValue>&)>* profile_functions;
     TypePtr* types;
+    ShapeSymbolTable symbols2dims;
 
     ActiveFrame(const Frame& frame)
         : pc(frame.pc),
@@ -1023,6 +1025,33 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
     RECORD_TORCHSCRIPT_FUNCTION(fn->name(), last(stack, code.num_inputs()));
     enterFrame(code, stack.size() - code.num_inputs());
     *af = ActiveFrame(frames.back());
+  }
+
+  bool bindSymbolicShapes(
+      ActiveFrame& af,
+      at::IntArrayRef new_sizes,
+      const c10::VaryingShape<c10::ShapeSymbol>& sym_shapes) {
+    if (!sym_shapes.size().has_value()) {
+      return true;
+    }
+    if (*sym_shapes.size() != new_sizes.size()) {
+      return false;
+    }
+    for (size_t i = 0; i < new_sizes.size(); i++) {
+      if (!sym_shapes[i].has_value()) {
+        continue;
+      }
+      auto symbol = *sym_shapes[i];
+      if (!af.symbols2dims.isBound(symbol)) {
+        af.symbols2dims.assign(symbol, new_sizes[i]);
+        continue;
+      }
+
+      if (af.symbols2dims.getValue(symbol) != new_sizes[i]) {
+        return false;
+      }
+    }
+    return true;
   }
 
   bool runImpl(Stack& stack) {
@@ -1245,9 +1274,18 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
               push(stack, true);
             } else {
               auto t = stack.back().toTensor();
-              const TypePtr& expected = af.types[inst.X];
               auto pttp = tensorTypeInCurrentExecutionContext(t);
-              push(stack, pttp->isSubtypeOf(expected));
+              const TypePtr& expected = af.types[inst.X];
+              auto expected_type = expected->cast<TensorType>();
+              bool pass = true;
+              if (t.defined()) {
+                pass &= bindSymbolicShapes(
+                    af, t.sizes(), expected_type->symbolic_sizes());
+                if (pass) {
+                  pttp = expected_type->merge(pttp, false);
+                }
+              }
+              push(stack, pttp->isSubtypeOf(expected_type));
             }
             ++af.pc;
           } break;

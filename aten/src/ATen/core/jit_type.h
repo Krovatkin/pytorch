@@ -406,6 +406,10 @@ struct CAFFE2_API ShapeSymbol {
     return value_;
   };
 
+  static ShapeSymbol unknownSymbol() {
+    return ShapeSymbol();
+  }
+
   static ShapeSymbol newSymbol() {
     return fromStaticSize(-static_cast<int64_t>(++num_symbols));
   };
