@@ -1251,14 +1251,22 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
               auto pttp = tensorTypeInCurrentExecutionContext(t);
               const TypePtr& expected = af.types[inst.X];
               auto expected_type = expected->cast<TensorType>();
-              bool pass = true;
+              bool bound_successfully = true;
               if (t.defined()) {
-                pass &= frames.back().symbols2dims.bindSymbolicShapes(t.sizes(), expected_type->symbolic_sizes());
-                if (pass) {
+                // check if symbols in the `expected_type` can bind to `t.sizes()`
+                 bound_successfully &= frames.back().symbols2dims.bindSymbolicShapes(t.sizes(), expected_type->symbolic_sizes());
+
+                // `merge(,false)` makes the merge result
+                // use the symbols from the `expected_type`
+                // since we already know that they bound
+                // successfully, so pttp should have
+                // the same symbolic type information
+                // as `expected_type`
+                if (bound_successfully) {
                   pttp = expected_type->merge(pttp, false);
                 }
               }
-              push(stack, pttp->isSubtypeOf(expected_type));
+              push(stack, bound_successfully && pttp->isSubtypeOf(expected_type));
             }
             ++af.pc;
           } break;

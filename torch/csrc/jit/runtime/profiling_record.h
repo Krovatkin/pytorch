@@ -18,6 +18,16 @@ using ::c10::TensorTypePtr;
 using Dimension = int64_t;
 
 struct ProfilingRecord;
+// A helper structure used for partitioning
+// a set associated with ShapeSymbol into
+// subsets each associated with a unique
+// Dimension (dimension value)
+// if the same symbol is
+// assigned to multiple `Dimension` in one of the
+// profiling runs the set of dimension locations
+// associated with the set will be split into
+// two subsets each associated with the new Dimension
+// value 
 struct ShapeSymbolSets {
   void reset() {
     sets_.clear();
@@ -61,24 +71,21 @@ struct ShapeSymbolTable {
     data_[s] = v;
   }
   std::map<c10::ShapeSymbol, Dimension> data_;
+  // to track subsets for each `ShapeSymbol`
+  // when partitioning the set for the `ShapeSymbol`
   ShapeSymbolSets sets_;
-  ProfilingRecord* pr_;
-
-  // a helper function to aid partitioning a set of
-  // Dimension locations associated with the symbol `set`
+ 
+  // a helper function for partitioning a set of
+  // dimension locations associated with `ShapeSymbol` `set`
   // The set is split into subsets each associated
-  // with an unique Dimension. The dimension locations from `set`
-  // that have the same Dimension values 
+  // with a unique Dimension. The dimension locations from `set`
+  // that have the same `Dimension` values 
   // will receive the same new symbols that will
   // partition them into the subsets associated
   // with those new symbols
   c10::ShapeSymbol getSymbolInSet(
       Dimension,
       c10::ShapeSymbol set);
-
-  c10::ShapeSymbol toSymbol(
-      Dimension,
-      std::map<Dimension, c10::ShapeSymbol>& dims2symbols);
 
     // a helper function to track assignments of Dimension values
     // to symbols. `bindSymbolicShapes` returns `true` if

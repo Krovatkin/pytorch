@@ -7,24 +7,18 @@
 namespace torch {
 namespace jit {
 
-c10::ShapeSymbol ShapeSymbolTable::toSymbol(
-    Dimension val,
-    std::map<Dimension, c10::ShapeSymbol>& dims2symbols) {
-  if (dims2symbols.count(val) == 0) {
-    auto new_sym = c10::ShapeSymbol::newSymbol();
-    dims2symbols[val] = new_sym;
-    return new_sym;
-  }
-
-  return dims2symbols[val];
-}
-
 c10::ShapeSymbol ShapeSymbolTable::getSymbolInSet(
     Dimension new_size,
     c10::ShapeSymbol set) {
   auto& dims2symbols = sets_.getSetForSymbol(set);
-  auto new_sym = toSymbol(new_size, dims2symbols);
-  return new_sym;
+
+  if (dims2symbols.count(new_size) == 0) {
+    auto new_sym = c10::ShapeSymbol::newSymbol();
+    dims2symbols[new_size] = new_sym;
+    return new_sym;
+  }
+
+  return dims2symbols[new_size];
 }
 
 bool ShapeSymbolTable::bindSymbolicShapes(
@@ -94,6 +88,8 @@ static void unprofileBlock(Block* start_block) {
   }
 }
 
+// merge shape symbols for dimension locations for
+// the same Tensor value
 std::vector<c10::optional<c10::ShapeSymbol>> ProfilingRecord::
     mergeSymbolicShapes(
         c10::VaryingShape<c10::ShapeSymbol> new_sizes,
@@ -117,7 +113,7 @@ std::vector<c10::optional<c10::ShapeSymbol>> ProfilingRecord::
       GRAPH_DEBUG(symbol, " is now bound to ", new_size);
       new_symbols.push_back(symbol);
     } else {
-      if (symbol_table.getValue(symbol) == new_sizes[i]->static_size()) {
+      if (symbol_table.getValue(symbol) == new_size) {
         GRAPH_DEBUG("Reusing symbol ", symbol);
         new_symbols.push_back(symbol);
       } else {
