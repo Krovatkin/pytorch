@@ -9,8 +9,7 @@ namespace jit {
 
 c10::ShapeSymbol ShapeSymbolTable::toSymbol(
     Dimension val,
-    std::map<Dimension, c10::ShapeSymbol>& dims2symbols,
-    ProfilingRecord* pr) {
+    std::map<Dimension, c10::ShapeSymbol>& dims2symbols) {
   if (dims2symbols.count(val) == 0) {
     auto new_sym = c10::ShapeSymbol::newSymbol();
     dims2symbols[val] = new_sym;
@@ -20,13 +19,38 @@ c10::ShapeSymbol ShapeSymbolTable::toSymbol(
   return dims2symbols[val];
 }
 
-c10::ShapeSymbol ShapeSymbolTable::GetSymbolInSet(
+c10::ShapeSymbol ShapeSymbolTable::getSymbolInSet(
     Dimension new_size,
-    c10::ShapeSymbol set,
-    ProfilingRecord* pr) {
+    c10::ShapeSymbol set) {
   auto& dims2symbols = sets_.getSetForSymbol(set);
-  auto new_sym = toSymbol(new_size, dims2symbols, pr);
+  auto new_sym = toSymbol(new_size, dims2symbols);
   return new_sym;
+}
+
+bool ShapeSymbolTable::bindSymbolicShapes(
+    at::IntArrayRef new_sizes,
+    const c10::VaryingShape<c10::ShapeSymbol>& sym_shapes) {
+  if (!sym_shapes.size().has_value()) {
+    return true;
+  }
+  if (*sym_shapes.size() != new_sizes.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < new_sizes.size(); i++) {
+    if (!sym_shapes[i].has_value()) {
+      continue;
+    }
+    auto symbol = *sym_shapes[i];
+    if (!isBound(symbol)) {
+      assign(symbol, new_sizes[i]);
+      continue;
+    }
+
+    if (getValue(symbol) != new_sizes[i]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 ProfilingRecord::ProfilingRecord(std::shared_ptr<Graph> g)
@@ -97,7 +121,7 @@ std::vector<c10::optional<c10::ShapeSymbol>> ProfilingRecord::
         GRAPH_DEBUG("Reusing symbol ", symbol);
         new_symbols.push_back(symbol);
       } else {
-        auto new_sym = symbol_table.GetSymbolInSet(new_size, symbol, this);
+        auto new_sym = symbol_table.getSymbolInSet(new_size, symbol);
         GRAPH_DEBUG(
             symbol,
             " is already bound to ",
@@ -218,9 +242,12 @@ std::unique_ptr<ProfilingRecord> ProfilingRecord::instrumentGraph(
         return;
       }
 
+      // the key is a frame id
+      // the value is a mapping from a Value in a graph
+      // to a profiled TensorType
+      // we make a copy of profiling information from the very first run
+      // and use it for building the symbol sets
       auto profiled_types_iter = raw_pr->profiled_types_per_frame_.begin();
-      // scratch symbol table and symbol sets for merging profiling information
-      // from multiple runs
       auto frame_id = profiled_types_iter->first;
       auto merged_profiled_types = profiled_types_iter->second;
       ShapeSymbolTable merged_symbol_table;

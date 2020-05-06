@@ -34,6 +34,9 @@ struct ShapeSymbolSets {
 };
 
 struct ShapeSymbolTable {
+  
+  // N.B. we treat static symbols as always assigned
+  // to themselves
   bool isBound(c10::ShapeSymbol s) {
     if (s.is_static()) {
       return true;
@@ -45,6 +48,8 @@ struct ShapeSymbolTable {
     sets_.reset();
   };
 
+  // N.B. we treat static symbols as always assigned
+  // to themselves
   Dimension getValue(c10::ShapeSymbol s) {
     if (s.is_static()) {
       return s.static_size();
@@ -59,14 +64,32 @@ struct ShapeSymbolTable {
   ShapeSymbolSets sets_;
   ProfilingRecord* pr_;
 
-  c10::ShapeSymbol GetSymbolInSet(
+  // a helper function to aid partitioning a set of
+  // Dimension locations associated with the symbol `set`
+  // The set is split into subsets each associated
+  // with an unique Dimension. The dimension locations from `set`
+  // that have the same Dimension values 
+  // will receive the same new symbols that will
+  // partition them into the subsets associated
+  // with those new symbols
+  c10::ShapeSymbol getSymbolInSet(
       Dimension,
-      c10::ShapeSymbol set,
-      ProfilingRecord* pr);
+      c10::ShapeSymbol set);
+
   c10::ShapeSymbol toSymbol(
       Dimension,
-      std::map<Dimension, c10::ShapeSymbol>& dims2symbols,
-      ProfilingRecord* pr);
+      std::map<Dimension, c10::ShapeSymbol>& dims2symbols);
+
+    // a helper function to track assignments of Dimension values
+    // to symbols. `bindSymbolicShapes` returns `true` if
+    // `new_sizes` can be assigned to `sym_shapes`
+    // A Dimension value can be assigned to a symbol
+    // the symbol hasn't been assigned to anything before
+    // or the symbol is already assigned the dimension value
+    // and both dimension values are equal
+    bool bindSymbolicShapes(
+      at::IntArrayRef new_sizes,
+      const c10::VaryingShape<c10::ShapeSymbol>& sym_shapes);
 };
 
 struct ProfilingRecord {
@@ -81,6 +104,9 @@ struct ProfilingRecord {
   std::shared_ptr<Graph> profiled_graph_;
   std::mutex mutex_;
   size_t profiling_count_;
+  // the key is a frame id
+  // the value is a mapping from a Value in a graph
+  // to a profiled TensorType
   std::map<int64_t, std::map<Value*, TensorTypePtr>> profiled_types_per_frame_;
   size_t num_symbols =
       1; // -1 is special to denote the global set of all symbols for a run
