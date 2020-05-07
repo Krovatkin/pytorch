@@ -13,7 +13,6 @@ class DeterminationTest(unittest.TestCase):
     # Test determination on a subset of tests
     TESTS = [
         "test_nn",
-        "test_jit_profiling",
         "test_jit",
         "test_torch",
         "distributed/test_distributed",
@@ -61,11 +60,11 @@ class DeterminationTest(unittest.TestCase):
     def test_test_file(self):
         """Test files trigger themselves and dependent tests"""
         self.assertEqual(
-            self.determined_tests(["test/test_jit.py"]), ["test_jit_profiling", "test_jit"]
+            self.determined_tests(["test/test_jit.py"]), ["test_jit"]
         )
         self.assertEqual(
             self.determined_tests(["test/jit/test_custom_operators.py"]),
-            ["test_jit_profiling", "test_jit"],
+            ["test_jit"],
         )
         self.assertEqual(
             self.determined_tests(["test/distributed/rpc/test_rpc_spawn.py"]),
