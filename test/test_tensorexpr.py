@@ -77,6 +77,21 @@ class TestTensorExprFuser(BaseTestClass):
         )
 
 
+    def test_doc(self):
+        @torch.jit.script
+        def foo(x, y):
+            if x.max() > y.max():
+                r = x
+            else:
+                r = y
+            return r
+
+
+        def bar(x, y, z):
+            return foo(x, y) + z
+
+        traced_bar = torch.jit.trace(bar, (torch.rand(3), torch.rand(3), torch.rand(3)))
+
     def test_four_arg(self):
         def run_addcmul(x, y, z, w):
             c = torch.addcmul(torch.add(x, y), z, w)

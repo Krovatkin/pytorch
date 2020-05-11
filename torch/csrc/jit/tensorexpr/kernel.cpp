@@ -250,6 +250,7 @@ Tensor* TensorExprKernel::computeTwoOperand(
     const std::function<ExprHandle(const ExprHandle&, const ExprHandle&)>&
         innerExpr) {
   auto const& n = v->node();
+  GRAPH_DEBUG("Computing n = ", getHeader(n));
   auto const& res =
       broadcastShapes(valueShape(n->inputs()[0]), valueShape(n->inputs()[1]));
   auto const& shape = res.first;
