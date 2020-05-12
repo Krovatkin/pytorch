@@ -11,6 +11,30 @@
 #include <map>
 #include <vector>
 
+// We would like to assign each position/axis of a tensor an abstract size
+// * For each `tensor` we have a profiled `Value` of a `TensorType` describing the properties of the `tensor`.
+// * `TensorType` has a property called `symbolic_sizes_` to describe observed `tensor.sizes()`
+// * `symbolic_sizes_` is a vector of abstract sizes (or `std::vector<ShapeSymbol>`) where
+//   * `ShapeSymbol`at `symbolic_sizes_[i]`  describes the size value (`Dimension`) at `tensor.sizes()[i]`
+// * We may see the same `Dimension` at different positions `i` in `tensor.sizes()` or even in different `tensor`
+//   * First, we would like associate the same `ShapeSymbol` to the same `Dimension` across **one** profiling execution or run 	of a TorchScript function.
+//     * The same `ShapeSymbol`s in different positions of `symbolic_shapes_` in possibly different `TensorType`s (i.e. `TensorType`s for different profiled values) form an implicit set. The elements of such a set are called *dimension locations*. 
+//     * These sets allow us to track how the shapes of input arguments of some operation relate to operation's output shapes as the input and output shapes might share the same `ShapeSymbol`s
+// * For **every** profiling run, we would like to maintain the invariant that *the same `ShapeSymbol` is always associated with the same `Dimension`*.
+// * To maintain this invariant we merge the profiling information from all profiling runs, 
+//   * For every two runs, we iterate over all `symbic_shapes_`  and compare their `ShapeSymbol`s in the same position. 
+//     * if we observe that for every dimension location that has the`ShapeSymbol S1`  in run #1 there is **only one** `ShapeSymbol S2` in the same dimension location in run #2, we conclude that the invariant holds.
+//     * However, if we observe some dimension locations in run #2 have `ShapeSymbol S2` and the other ones have `ShapeSymbol S3` we would like to partition the virtual set of dimension locations associated with `ShapeSymbol S1` into two new subsets, so the invariant holds.
+//     * The partitioning works by assigning a new symbol to the dimension locations (associated with `ShapeSymbol S1`) that have `ShapeSymbol S2` and another new symbol to the dimension locations that have `ShapeSymbol S3`. In other words,
+//       * Subset #1 will consist of the dimension locations that in run #2 have `ShapeSymbol S2`  and will have `ShapeSymbol S4`  in those dimension locations
+//       * Subset #2 will consist of the dimension locations that in run #2 have `ShapeSymbol S4`  and will have `ShapeSymbol S5`  in those dimension locations
+//     * The effective result of merging the profiling information from two runs is new `TensorTypes` whose `symbolic_sizes_` /dimension locations have either `ShapeSymbol S4` or `ShapeSymbol S5`.
+//     * Partitioning can be done even before we have seen all the dimension locations associated with `ShapeSymbol S1` 
+//       * We use `getSymbolInSet` of `ShapeSymbolTable` to remember all  `ShapeSymbols` from run #2 we observed in the dimension locations associated with `ShapeSymbol S1` .
+//       * For every `ShapeSymbol` from run #2 in the dimension location associated with `ShapeSymbol S1`  `getSymbolInSet` returns a symbol that we assign to the dimension location in a new TensorType.
+//         * It's important to point out that the same `ShapeSymbol S2` from run #2 in two dimension locations that have different `ShapeSymbol`s in run #1 are different! These dimension locations will belong to different subsets and have different `ShapeSymbol`s after merge.
+//         * On the other hand, for the same `ShapeSymbol S2` in two dimension locations that have `ShapeSymbol S1` in run #1`getSymbolInSet` will return the same symbol.  
+
 namespace torch {
 namespace jit {
 
@@ -18,31 +42,55 @@ using ::c10::TensorTypePtr;
 using Dimension = int64_t;
 
 struct ProfilingRecord;
-// A helper structure used for partitioning
-// a set associated with ShapeSymbol into
-// subsets each associated with a unique
-// Dimension (dimension value)
-// if the same symbol is
-// assigned to multiple `Dimension` in one of the
-// profiling runs the set of dimension locations
-// associated with the set will be split into
-// two subsets each associated with the new Dimension
-// value 
-struct ShapeSymbolSets {
-  void reset() {
-    sets_.clear();
-  };
-  std::map<c10::ShapeSymbol, std::map<Dimension, c10::ShapeSymbol>> sets_;
 
-  std::map<Dimension, c10::ShapeSymbol>& getGlobalSet() {
-    return getSetForSymbol(c10::ShapeSymbol::unknownSymbol());
+// `SetPartitioningHelper` is used to maintain the following invariant:
+// For **every** profiling run, *the same `ShapeSymbol` is always associated 
+// with the same `Dimension`*.
+// while merging the profiling information from multiple runs.
+struct SetPartitioningHelper {
+  
+  std::map<c10::ShapeSymbol, std::map<Dimension, c10::ShapeSymbol>> sets2subsets_;
+
+  // `partitionSetByDimension` partitions a virtual set  
+  // of dimension locations associated with ShapeSymbol `symbol` into subsets.
+  // Partitioning is equivalent to giving (or renaming) a particular  
+  // dimension location a new `ShapeSymbol`.
+  // The same `Dimension` value in different dimension locations
+  // that used to have `symbol` will receive the same
+  // new `ShapeSymbol`, effectively forming a new set.
+  c10::ShapeSymbol partitionSetByDimension(
+    Dimension new_size,
+    c10::ShapeSymbol symbol) {
+    auto& dims2symbols = getSetForSymbol(symbol);
+
+    if (dims2symbols.count(new_size) == 0) {
+      auto new_sym = c10::ShapeSymbol::newSymbol();
+      dims2symbols[new_size] = new_sym;
+      return new_sym;
+    }
+
+    return dims2symbols[new_size];
   }
 
-  std::map<Dimension, c10::ShapeSymbol>& getSetForSymbol(c10::ShapeSymbol s) {
-    return sets_[s];
-  }
+  private:
+
+    std::map<Dimension, c10::ShapeSymbol>& getSetForSymbol(c10::ShapeSymbol s) {
+      auto& set = sets2subsets_[s];
+      // N.B. adding a mapping { s.static_size(), s }
+      // makes sure we preserve the fact that
+      // some dimension values remain the same
+      // across all profiled runs
+      if (s.is_static()) {
+        set.insert({s.static_size(), s});
+      }
+      return set;
+    }
 };
 
+// ShapeSymbolTable is used by Interpreter
+// to assign dimension values to ShapeSymbols
+// and fail a guard if the same symbol
+// is assigned more than one dimension value.
 struct ShapeSymbolTable {
   
   // N.B. we treat static symbols as always assigned
@@ -53,10 +101,6 @@ struct ShapeSymbolTable {
     }
     return data_.count(s) != 0;
   }
-  void reset() {
-    data_.clear();
-    sets_.reset();
-  };
 
   // N.B. we treat static symbols as always assigned
   // to themselves
@@ -71,29 +115,16 @@ struct ShapeSymbolTable {
     data_[s] = v;
   }
   std::map<c10::ShapeSymbol, Dimension> data_;
-  // to track subsets for each `ShapeSymbol`
-  // when partitioning the set for the `ShapeSymbol`
-  ShapeSymbolSets sets_;
- 
-  // a helper function for partitioning a set of
-  // dimension locations associated with `ShapeSymbol` `set`
-  // The set is split into subsets each associated
-  // with a unique Dimension. The dimension locations from `set`
-  // that have the same `Dimension` values 
-  // will receive the same new symbols that will
-  // partition them into the subsets associated
-  // with those new symbols
-  c10::ShapeSymbol getSymbolInSet(
-      Dimension,
-      c10::ShapeSymbol set);
 
-    // a helper function to track assignments of Dimension values
-    // to symbols. `bindSymbolicShapes` returns `true` if
-    // `new_sizes` can be assigned to `sym_shapes`
-    // A Dimension value can be assigned to a symbol
-    // the symbol hasn't been assigned to anything before
-    // or the symbol is already assigned the dimension value
-    // and both dimension values are equal
+    // Tries to assign dimension values from `new_sizes` to
+    // `ShapeSymbol`s `sym_shapes`.
+    // Returns `true` if every dimension value from `new_sizes`
+    // can be assigned to the corresponding `ShapeSymbol` from
+    // `sym_shapes`
+    // A dimension value can be assigned to a `ShapeSymbol`
+    // * if the symbol isn't assigned yet any dimension value
+    // * if the symbol is assigned and its value is equal to
+    // the dimension value from `new_sizes`
     bool bindSymbolicShapes(
       at::IntArrayRef new_sizes,
       const c10::VaryingShape<c10::ShapeSymbol>& sym_shapes);
@@ -115,56 +146,14 @@ struct ProfilingRecord {
   // the value is a mapping from a Value in a graph
   // to a profiled TensorType
   std::map<int64_t, std::map<Value*, TensorTypePtr>> profiled_types_per_frame_;
-  size_t num_symbols =
-      1; // -1 is special to denote the global set of all symbols for a run
 
-  // A very brief high-level description of an algorithm for
-  // constructing sets of dynamic/symbolic shapes.
-  // Each set is represented by a ShapeSymbol which can be
-  // static or dynamic
-  // We implicitly keep track of elements of sets (Value*, i)
-  // by assigning a ShapeSymbol to a dimension i in sizes_ of the TensorType of
-  // a Value if sizes_[1] of %1 and sizes_[2] of %2 have the same
-  // ShapeSymbol(-3, false) they belong to the same set. The algorithm has two
-  // main stages. The first stage is to construct symbolic sets for one
-  // profiling execution of a graph
-  //  * if `sizes_[i]` was never assigned to a set before, it is assigned a
-  //  static ShapeSymbol(dim_value, true)
-  //    this gives us the initial sets.
-  //  * if `sizes_[i]` was assigned before (this could happen if a profiled use
-  //  is in a loop) there are 4 cases to handle (`mergeSymbolicShapes`)
-  //    * if the ShapeSymbol X at `sizes_[i]` is static and a new symbol is
-  //    equal to it (belong to the same set), we keep the original symbol
-  //    * if the ShapeSymbol X at sizes_[i] is static and a new symbol is not
-  //    equal, we will assign sizes_[i] to a new symbol (this is equivalent to
-  //    creating a new subset)
-  //    * if the ShapeSymbol X at sizes_[i] is dynamic but we didn't assign it
-  //    yet, we will sizes_[i] to a new symbol.
-  //         Note, ShapeSymbol can be used both as a Symbol but also as a value
-  //         assigned to a Symbol
-  //    * if the ShapeSymbol X at sizes_[i] is dynamic and assigned and a new
-  //    symbol is equal to the assigned sizes_[i], we keep the original symbol
-  //    * if the ShapeSymbol X at sizes_[i] is dynamic and assigned isn't equal
-  //    to the assigned sizes_[i], we create a new subset that is represented by
-  //    a new symbol whenever we see the same new symbol is being matched
-  //    against the ShapeSymbol X we will put it in the same subset.
-  // The second stage is to merge symbolic sets from all profiling executions of
-  // the graph Since merge/refinement operation is commutative, the order in
-  // which we merge symbolic sets from different runs doesn't matter we use the
-  // sets from the first run as our initial sets and we essentially reuse the
-  // same merge algorithm `mergeSymbolicShapes` the stage 2 adds one extra case
-  // we need to deal with is when the runs we processed so far don't have
-  // profiling information for some uses that the current run we are merging the
-  // information from has. This could happen if the first run executed the then
-  // arm of an if and the second run executed the else arm. Since some
-  // ShapeSymbols in the current run might already belong to a set we do a
-  // reverse search to find which set the ShapeSymbol belongs. Ideally, we would
-  // like to put it in the biggest set to be optimal but currently for
-  // simplicity we put in a set whose ShapeSymbol was mapped to it the latest.
+
+  // A thin wrapper around `partitionSetByDimension` to ensure
+  // `new_sizes` and `sym_shapes` are of the same rank
   std::vector<c10::optional<c10::ShapeSymbol>> mergeSymbolicShapes(
       c10::VaryingShape<c10::ShapeSymbol> new_sizes,
       c10::VaryingShape<c10::ShapeSymbol> sym_shapes,
-      ShapeSymbolTable& symbol_table);
+      SetPartitioningHelper& symbol_table);
 
   bool ready() const {
     return profiling_count_ == 0;

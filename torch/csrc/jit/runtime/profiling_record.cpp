@@ -7,19 +7,7 @@
 namespace torch {
 namespace jit {
 
-c10::ShapeSymbol ShapeSymbolTable::getSymbolInSet(
-    Dimension new_size,
-    c10::ShapeSymbol set) {
-  auto& dims2symbols = sets_.getSetForSymbol(set);
 
-  if (dims2symbols.count(new_size) == 0) {
-    auto new_sym = c10::ShapeSymbol::newSymbol();
-    dims2symbols[new_size] = new_sym;
-    return new_sym;
-  }
-
-  return dims2symbols[new_size];
-}
 
 bool ShapeSymbolTable::bindSymbolicShapes(
     at::IntArrayRef new_sizes,
@@ -88,13 +76,11 @@ static void unprofileBlock(Block* start_block) {
   }
 }
 
-// merge shape symbols for dimension locations for
-// the same Tensor value
 std::vector<c10::optional<c10::ShapeSymbol>> ProfilingRecord::
     mergeSymbolicShapes(
         c10::VaryingShape<c10::ShapeSymbol> new_sizes,
         c10::VaryingShape<c10::ShapeSymbol> sym_shapes,
-        ShapeSymbolTable& symbol_table) {
+        SetPartitioningHelper& partition_helper) {
   std::vector<c10::optional<c10::ShapeSymbol>> new_symbols;
   TORCH_INTERNAL_ASSERT(
       new_sizes.size().has_value() && sym_shapes.size().has_value() &&
@@ -108,28 +94,10 @@ std::vector<c10::optional<c10::ShapeSymbol>> ProfilingRecord::
     TORCH_INTERNAL_ASSERT(new_sizes[i]->is_static());
     Dimension new_size = new_sizes[i]->static_size();
     GRAPH_DEBUG("Merging symbol ", symbol);
-    if (!symbol_table.isBound(symbol)) {
-      symbol_table.assign(symbol, new_size);
-      GRAPH_DEBUG(symbol, " is now bound to ", new_size);
-      new_symbols.push_back(symbol);
-    } else {
-      if (symbol_table.getValue(symbol) == new_size) {
-        GRAPH_DEBUG("Reusing symbol ", symbol);
-        new_symbols.push_back(symbol);
-      } else {
-        auto new_sym = symbol_table.getSymbolInSet(new_size, symbol);
-        GRAPH_DEBUG(
-            symbol,
-            " is already bound to ",
-            symbol_table.getValue(symbol),
-            " assigning ",
-            new_size,
-            " a new symbol ",
-            new_sym);
-        new_symbols.push_back(new_sym);
-      }
-    }
+    auto new_sym = partition_helper.partitionSetByDimension(new_size, symbol);
+    new_symbols.push_back(new_sym);
   }
+  
   return new_symbols;
 }
 
@@ -246,13 +214,12 @@ std::unique_ptr<ProfilingRecord> ProfilingRecord::instrumentGraph(
       auto profiled_types_iter = raw_pr->profiled_types_per_frame_.begin();
       auto frame_id = profiled_types_iter->first;
       auto merged_profiled_types = profiled_types_iter->second;
-      ShapeSymbolTable merged_symbol_table;
       profiled_types_iter++;
 
       // merge profiling information from next runs into the first one
       for (; profiled_types_iter != raw_pr->profiled_types_per_frame_.end();
            profiled_types_iter++) {
-        merged_symbol_table.reset();
+        SetPartitioningHelper partition_helper;
         for (auto val_type_pair : profiled_types_iter->second) {
           if (merged_profiled_types.count(val_type_pair.first) == 0) {
             merged_profiled_types[val_type_pair.first] = val_type_pair.second;
@@ -263,7 +230,7 @@ std::unique_ptr<ProfilingRecord> ProfilingRecord::instrumentGraph(
               auto new_shape = raw_pr->mergeSymbolicShapes(
                   val_type_pair.second->symbolic_sizes(),
                   type->symbolic_sizes(),
-                  merged_symbol_table);
+                  partition_helper);
               GRAPH_DEBUG(
                   "Merging ",
                   *val_type_pair.second,
