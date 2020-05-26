@@ -6,6 +6,7 @@
 #include <torch/csrc/jit/passes/tensorexpr_fuser.h>
 #include <torch/csrc/jit/runtime/graph_executor.h>
 #include <torch/csrc/jit/runtime/interpreter.h>
+#include <algorithm>
 
 namespace torch {
 namespace jit {
@@ -161,43 +162,19 @@ bool needsProfiledInputs(Node* n) {
   }
 }
 
-bool needsProfiledOutput(Node* n) {
-  if (tensorexpr::isSupported(n)) {
-    return true;
-  }
-
-  switch (n->kind()) {
-    case prim::AutogradAdd:
-    case prim::AutogradZero:
-      return true;
-    default:
-      return false;
-  }
-}
-
 void ProfilingRecord::instrumentBlock(Block* block) {
   for (auto it = block->nodes().begin(); it != block->nodes().end(); ++it) {
     auto n = *it;
+
+    if (needsProfiledInputs(n))
     for (auto i : n->inputs()) {
-      if (i->type()->kind() == c10::TypeKind::TensorType &&
-          (needsProfiledInputs(n) || needsProfiledOutput(i->node()))) {
+      if (i->type()->kind() == c10::TypeKind::TensorType && !needsProfiledInputs(i->node())) {
         insertShapeProfile(n, i);
       }
     }
 
     for (auto b : n->blocks()) {
       instrumentBlock(b);
-    }
-  }
-
-  // inserting profile nodes on block outputs
-  // allows us to eliminate more guards as
-  // the use of a guard is now in the same
-  // block as opposed to being separated from
-  // the definition by block boundaries
-  for (auto i : block->return_node()->inputs()) {
-    if (i->type()->isSubtypeOf(TensorType::get())) {
-      insertShapeProfile(block->return_node(), i);
     }
   }
 }
