@@ -126,11 +126,16 @@ void ProfilingRecord::insertShapeProfile(Node* n, Value* i) {
         if (profiled_types.count(pno) == 0) {
           profiled_types.insert({pno, pttp});
         } else {
-          auto type = profiled_types.at(pno);
-          GRAPH_DEBUG("Existing type for %", pno->debugName(), " ", *type);
-          pttp = type->merge(pttp);
-          GRAPH_DEBUG("Result for %", pno->debugName(), " ", *pttp);
-          profiled_types[pno] = pttp;
+
+          static auto const DISABLE_MERGE = std::getenv("DISABLE_MERGE");
+          if (!DISABLE_MERGE) {
+            auto type = profiled_types.at(pno);
+            GRAPH_DEBUG("Existing type for %", pno->debugName(), " ", *type);
+            pttp = type->merge(pttp);
+            GRAPH_DEBUG("Result for %", pno->debugName(), " ", *pttp);
+            profiled_types[pno] = pttp;
+          }
+
         }
       } else {
         profiled_types[pno] = TensorType::get()->withUndefined();
