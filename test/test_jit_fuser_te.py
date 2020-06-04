@@ -751,7 +751,8 @@ class TestFuser(JitTestCase):
             ingate, forgetgate, cellgate, outgate = gates.chunk(4, 1)
             return ingate * forgetgate * cellgate * outgate
         ''')
-        for permutation in permutations(choices, len(choices)):
+        for permutation in [('x.mm(w_ih.t())', 'b_ih', 'b_hh', 'hx.mm(w_hh.t())')]: #permutations(choices, len(choices)):
+            print(permutation)
             code = template.format(*permutation)
             scope = {}
             exec(code, globals(), scope)
