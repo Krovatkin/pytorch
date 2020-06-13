@@ -190,13 +190,23 @@ bool needsProfiledOutput(Node* n) {
   }
 }
 
+
+
 void ProfilingRecord::instrumentBlock(Block* block) {
   for (auto it = block->nodes().begin(); it != block->nodes().end(); ++it) {
     auto n = *it;
-    for (auto i : n->inputs()) {
-      if (i->type()->kind() == c10::TypeKind::TensorType &&
-          (needsProfiledInputs(n) || needsProfiledOutput(i->node()))) {
-        insertShapeProfile(n, i);
+    // for (auto i : n->inputs()) {
+    //   if (i->type()->kind() == c10::TypeKind::TensorType &&
+    //       (needsProfiledInputs(n) || needsProfiledOutput(i->node()))) {
+    //     insertShapeProfile(n, i);
+    //   }
+    // }
+
+    if (needsProfiledInputs(n)) {
+      for (auto i : n->inputs()) {
+        if (i->type()->kind() == c10::TypeKind::TensorType && !needsProfiledInputs(i->node()) && i->node()->kind() != prim::If) {
+          insertShapeProfile(n, i);
+        }
       }
     }
 
@@ -210,11 +220,12 @@ void ProfilingRecord::instrumentBlock(Block* block) {
   // the use of a guard is now in the same
   // block as opposed to being separated from
   // the definition by block boundaries
-  for (auto i : block->return_node()->inputs()) {
-    if (i->type()->isSubtypeOf(TensorType::get())) {
-      insertShapeProfile(block->return_node(), i);
-    }
-  }
+
+  // for (auto i : block->return_node()->inputs()) {
+  //   if (i->type()->isSubtypeOf(TensorType::get())) {
+  //     insertShapeProfile(block->return_node(), i);
+  //   }
+  // }
 }
 
 std::unique_ptr<ProfilingRecord> ProfilingRecord::instrumentGraph(

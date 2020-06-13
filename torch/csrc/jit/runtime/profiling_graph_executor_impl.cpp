@@ -25,6 +25,8 @@
 #include <torch/csrc/jit/passes/specialize_autogradzero.h>
 #include <torch/csrc/jit/passes/loop_unrolling.h>
 #include <torch/csrc/jit/passes/create_functional_graphs.h>
+#include <torch/csrc/jit/passes/inliner.h>
+#include <limits>
 
 C10_DECLARE_bool();
 
@@ -119,7 +121,7 @@ void ProfilingGraphExecutorImpl::runProfilingOptimizations(
         getAutodiffSubgraphInlining() ? autodiffSubgraphInlineThreshold : 1);
 
   } else {
-    runNondiffOptimization(copy, true);
+    runNondiffOptimization(copy);
   }
   EliminateDeadCode(copy);
   GRAPH_DUMP("Optimized Graph : ", copy);
@@ -127,6 +129,7 @@ void ProfilingGraphExecutorImpl::runProfilingOptimizations(
 
 void ProfilingGraphExecutorImpl::runProfilingInsensitiveOptimizations(
     std::shared_ptr<Graph>& copy) {
+  Inline(*copy);
   ClearProfilingInformation(copy);
   LowerGradOf(*copy);
   GRAPH_DUMP("runProfilingInsensitiveOptimizations", copy);
@@ -184,6 +187,11 @@ ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(
       PeelProfilingLoops(copy);
     }
     UnrollLoops(copy);
+    CreateAutodiffSubgraphs(
+        copy,
+        getAutodiffSubgraphInlining() ? autodiffSubgraphNodeThreshold : 1);
+    InlineAutodiffSubgraphs(copy, std::numeric_limits<int64_t>::max());
+    GRAPH_DUMP("After inlining all autodiff graphs:", copy);
     pr_ = ProfilingRecord::instrumentGraph(copy);
     auto pr_copy = pr_->graph()->copy();
     GRAPH_DUMP("Profiled Graph: ", pr_copy);

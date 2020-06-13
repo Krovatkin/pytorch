@@ -248,7 +248,11 @@ struct GuardElimination {
         AT_ASSERT(
             input->node()->kind() != prim::Guard ||
             input->type()->expect<TensorType>());
-      } else {
+      } if (isLoweredGradOf(input->node()) && input->type()->cast<TensorType>() && !input->type()->expect<TensorType>()->isSummarized()) {
+        GRAPH_DEBUG("Input comes for if(anyzero) %", input->debugName());
+        continue;
+      } 
+      else {
         GRAPH_DEBUG(
             "input ",
             input->debugName(),

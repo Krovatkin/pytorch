@@ -38,12 +38,12 @@ graph_node_list::iterator scanNode(Node* node, size_t threshold) {
     return next_node;
   }
 
-  if (!std::all_of(
-          subgraph->nodes().begin(),
-          subgraph->nodes().end(),
-          canRunWithAutograd)) {
-    return next_node;
-  }
+  // if (!std::all_of(
+  //         subgraph->nodes().begin(),
+  //         subgraph->nodes().end(),
+  //         canRunWithAutograd)) {
+  //   return next_node;
+  // }
 
   SubgraphUtils::unmergeSubgraph(node);
   return next_node;
