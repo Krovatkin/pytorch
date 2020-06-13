@@ -224,7 +224,8 @@ void ArgumentSpecCreator::specializeTypes(
       case SPECIALIZE_OPTIONAL: {
         auto is_present = spec.isPresent(optional_arg_spec_offset++);
         auto ot = (*input_stack.back()++)->expect<OptionalType>();
-        if (!is_present) {
+        const static auto forceOptional = std::getenv("FORCE_OPTIONAL");
+        if (!is_present || forceOptional) {
           result_stack.back().emplace_back(ot);
         } else {
           result_stack.back().emplace_back(ot->getElementType());
