@@ -123,8 +123,18 @@ def print_json_oss_format(results):
             oss_results[group_name][model_name] = run_time['avg']
 
     print(json.dumps(oss_results))
+         
+         
+        # group_name: {k: {"avg": v.avg_fwd, "std": v.std_fwd, "info": v.info_fwd} for k, v in results.items()},
+        # group_name + '-backward': {k: {"avg": v.avg_bwd, "std": v.std_bwd, "info": v.info_bwd} for k, v in results.items()},
 
-
+def print_csv_format(mode, results):
+    oss_results = {}
+    for group_name, group_val in results.items():
+        oss_results[group_name] = {}
+        for model_name, run_time in group_val.items():
+            print(f"runtime,{group_name}-{model_name},{mode},{run_time['avg']}")
+        
 def print_json_pep_format(results):
     # print the AI-PEP format json string for each model
     for group_name, group_val in results.items():
@@ -170,7 +180,6 @@ def bench_group(model_list, bench_name, bench_group, bench_args):
     nn_results = bench(get_nn_runners(*model_list), bench_group, **bench_args)
     print_stderr('')
     return nn_results
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Profile RNNs')
@@ -284,7 +293,13 @@ if __name__ == '__main__':
     if 'cnns' in args.group:
         results.update(bench_group(cnns, 'ResNet', 'resnet', bench_args))
 
+    modes_map = { ('legacy', 'old') : 'le', ('simple', 'old') : 'se', ('profiling', 'te') : 'te', ('profiling', 'old') : 'pe' }
+    print(modes_map)
+    mode = modes_map[(args.executor, args.fuser)]
+    print_csv_format(mode, results)
+
     if args.print_json == 'oss':
         print_json_oss_format(results)
     elif args.print_json == 'pep':
         print_json_pep_format(results)
+
