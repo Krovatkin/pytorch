@@ -4,6 +4,7 @@
 #include <jit/jit_log.h>
 #include <torch/csrc/jit/passes/clear_undefinedness.h>
 #include <torch/csrc/jit/runtime/graph_executor.h>
+#include "jit/runtime/profiling_graph_executor_impl.h"
 
 namespace torch {
 namespace jit {
@@ -111,8 +112,14 @@ struct AutogradZeroSpecializer {
     // we will optimize true_block
     true_block->cloneFrom(graph_->block(), value_map);
     replaceBlockInputsWithGraph(true_block);
-    false_block->cloneFrom(graph_->block(), value_map);
-    replaceBlockInputsWithGraph(false_block);
+    // false_block->cloneFrom(graph_->block(), value_map);
+    // replaceBlockInputsWithGraph(false_block);
+    auto fallback = createFallbackGraph(graph_->block(), graph_->inputs(), graph_.get());
+    false_block->appendNode(fallback);
+    for (auto ov : fallback->outputs()) {
+      false_block->registerOutput(ov);
+    }
+
 
     WithInsertPoint wip{graph_->block()};
     Value* none_val = graph_->insertConstant(IValue());
@@ -159,6 +166,30 @@ struct AutogradZeroSpecializer {
       // the checks we inserted will be cleaned up
       // by any subsequent DCE pass
       return nullptr;
+    }
+
+    static auto const PT_CHECK = std::getenv("PT_CHECK");
+    if (PT_CHECK)
+    {
+      WithInsertPoint wip2{*false_block->nodes().begin()};
+      std::vector<Value*> print_inputs;
+      auto debug_print_cnst = graph_->insertConstant(IValue{std::string("autodiff check triggered")});
+      print_inputs.push_back(debug_print_cnst);
+      auto blank_cnst = graph_->insertConstant(IValue{std::string(" ")});
+      
+      for (auto check : checks) {
+        print_inputs.push_back(blank_cnst);
+        auto node_name_str =  graph_->insertConstant(IValue{std::string(getHeader(check->node()))});
+        print_inputs.push_back(node_name_str);
+        print_inputs.push_back(blank_cnst);
+        print_inputs.push_back(check);
+      }
+      auto print_stmt = graph_->create(prim::Print, 0);
+      graph_->insertNode(print_stmt);
+      for (auto pv: print_inputs) {
+        
+        print_stmt->addInput(pv);
+      }
     }
 
     Value* bool_list =

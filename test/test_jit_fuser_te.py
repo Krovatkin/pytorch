@@ -96,6 +96,26 @@ class TestTEFuser(JitTestCase):
     def test_abs_cuda(self):
         self._test_fused_abs(device="cuda")
 
+
+    def test_mul_nick(self):
+
+        @torch.jit.script
+        def test_fuse(a, b):
+            c = a * b
+            d = c + b
+            return d
+
+        x = torch.ones(1, requires_grad = True)
+        y = torch.ones(1, requires_grad = True)
+        test_fuse(x, y)
+        b = test_fuse(x, y)
+        x = torch.ones(2, requires_grad = True)
+        y = torch.ones(2, requires_grad = True)
+        b = test_fuse(x, y)
+        # warmup_backward(b)
+        # b.backward()
+        # b.backward()
+
     def _test_zero_element_tensors(self, device="cpu"):
         def decode(sin_t, cos_t):
             theta = torch.atan2(sin_t.float(), cos_t.float())

@@ -28,6 +28,7 @@ struct ProfilingGraphExecutorImpl : public GraphExecutorImplBase {
       profiling_plan_; // plan to run in order to profiling the code
   c10::optional<ExecutionPlan> optimized_plan_;
   std::vector<std::unique_ptr<Function>> fallback_functions_;
+  c10::optional<size_t> remaining_bailout_depth_;
 };
 
 } // namespace jit

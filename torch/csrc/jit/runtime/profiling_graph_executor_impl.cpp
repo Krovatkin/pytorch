@@ -66,6 +66,22 @@ std::atomic<size_t>& getBailoutDepth() {
   return bailout_depth;
 }
 
+void removeProfilingNodes(Block* b) {
+  for (auto it = b->nodes().begin(); it != b->nodes().end(); it++) {
+    if (it->kind() == prim::profile || it->kind() == prim::profile_optional) {
+
+      if (it->outputs().size()) {
+        it->output()->replaceAllUsesWith(it->input());
+      }
+      it.destroyCurrent();
+    } else {
+      for (Block* ib : it->blocks()) {
+        removeProfilingNodes(ib);
+      }
+    }
+  }
+}
+
 static bool needsGradientInProfilingMode(Block* b) {
   for (auto n : b->nodes()) {
     if (n->kind() == prim::BailOut) {
@@ -378,12 +394,16 @@ ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(
   std::lock_guard<std::mutex> lock(compile_mutex);
   GRAPH_DEBUG("Running ProfilingGraphExecutorImpl ", this);
 
+ if (!remaining_bailout_depth_.has_value()) {
+   remaining_bailout_depth_ = remaining_bailout_depth;
+ }
+
   if (optimized_plan_) {
     return *optimized_plan_;
   }
 
   // simple executor
-  if (remaining_bailout_depth == 0) {
+  if (*remaining_bailout_depth_ == 0) {
     auto copy = graph->copy();
     runProfilingInsensitiveOptimizations(copy);
     GRAPH_DUMP("Optimized SimpleExecutor Graph : ", copy);
@@ -394,8 +414,9 @@ ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(
   // if a profiling graph hasn't been created yet
   if (!pr_) {
     auto copy = graph->copy();
+    removeProfilingNodes(copy->block());
     runProfilingInsensitiveOptimizations(copy);
-    if (remaining_bailout_depth == getBailoutDepth()) {
+    if (*remaining_bailout_depth_ == getBailoutDepth()) {
       PeelProfilingLoops(copy);
     }
     pr_ = ProfilingRecord::instrumentGraph(copy);
@@ -415,9 +436,10 @@ ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(
   // replaces a fallback graph inserted by
   // if specialize_autogradzero one exists
   replaceFallbackGraphWithFallbackFunction(copy->block());
+  GRAPH_DUMP("Optimized Graph: ", copy);
   // cache
   optimized_plan_ =
-      ExecutionPlan(copy, function_name_, remaining_bailout_depth);
+      ExecutionPlan(copy, function_name_, *remaining_bailout_depth_);
   return *optimized_plan_;
 }
 
@@ -484,14 +506,17 @@ Node* insertFallbackFunctionCall(
   return fun_unpack_tuple;
 }
 
-void ProfilingGraphExecutorImpl::replaceFallbackGraphWithFallbackFunction(
-    Block* b) {
+
+
+void ProfilingGraphExecutorImpl::replaceFallbackGraphWithFallbackFunction(Block* b) {
   Stack s;
   for (auto it = b->nodes().begin(); it != b->nodes().end();) {
     if (it->kind() == prim::FallbackGraph) {
       auto fallback_func = createFallbackPathFunction(
           it->g(attr::Subgraph)->block(), "fallback_function");
-      fallback_func->get_executor().getPlanFor(s, bailout_depth - 1);
+      TORCH_INTERNAL_ASSERT(*remaining_bailout_depth_ > 0);
+      GRAPH_DEBUG("getPlanFor for", getHeader(*it), " ", *remaining_bailout_depth_);
+      fallback_func->get_executor().getPlanFor(s ,*remaining_bailout_depth_ - 1);
       fallback_functions_.emplace_back(fallback_func);
       WithInsertPoint wip{*it};
       auto function_call = insertFallbackFunctionCall(

@@ -10,6 +10,7 @@
 #include <torch/csrc/jit/runtime/operator_options.h>
 #include <torch/csrc/jit/tensorexpr/kernel.h>
 #include <torch/csrc/utils/memory.h>
+#include <torch/csrc/jit/runtime/profiling_graph_executor_impl.h>
 
 namespace torch {
 namespace jit {
@@ -146,7 +147,7 @@ class TensorExprFuser {
     printTypeInfoMap();
     GRAPH_DUMP("After removing profiling nodes: ", graph_);
     createFusionGroups(graph_->block());
-    printTypeInfoMap();
+    //printTypeInfoMap();
     guardFusionGroups(graph_->block());
     GRAPH_DUMP("After inserting guards: ", graph_);
   }
@@ -204,6 +205,7 @@ class TensorExprFuser {
     }
 
     // Update typeinfo for inputs and outputs of the fusion group
+    //printTypeInfoMap();
     if (fusion_group->kind() == prim::TensorExprGroup) {
       auto subgraph = SubgraphUtils::getSubgraph(fusion_group);
       for (size_t idx = 0; idx < subgraph->inputs().size(); idx++) {
@@ -212,8 +214,8 @@ class TensorExprFuser {
           typeinfo_map_[fusion_group->input(idx)] = ty;
           subgraph->inputs()[idx]->setType(ty);
           GRAPH_DEBUG(
-              "TYPEINFO ADD: %",
-              fusion_group->input(idx)->debugName(),
+              "TYPEINFO ADD IN: %",
+              fusion_group->input(idx)->debugName(), "(", fusion_group->input(idx) , ") ",
               " --> ",
               *ty);
         }
@@ -223,8 +225,8 @@ class TensorExprFuser {
           auto ty = typeinfo_map_[subgraph->outputs()[idx]];
           typeinfo_map_[fusion_group->output(idx)] = ty;
           GRAPH_DEBUG(
-              "TYPEINFO ADD: %",
-              fusion_group->output(idx)->debugName(),
+              "TYPEINFO ADD OUT: %",
+              fusion_group->output(idx)->debugName(), "(", fusion_group->output(idx) , ") ",
               " --> ",
               *ty);
         }
@@ -307,9 +309,10 @@ class TensorExprFuser {
     for (const auto& kv : vmap) {
       if (typeinfo_map_.count(kv.first)) {
         auto ty = typeinfo_map_.at(kv.first);
+        GRAPH_DEBUG("ERASE: %N/A", "(", kv.first , ") ", " --> ", *ty);
         typeinfo_map_.erase(kv.first);
         typeinfo_map_[kv.second] = ty;
-        GRAPH_DEBUG("TYPEINFO UPDATE: %", kv.second->debugName(), " --> ", *ty);
+        GRAPH_DEBUG("TYPEINFO UPDATE: %", kv.second->debugName(), "(", kv.second , ") ", " --> ", *ty);
       }
     }
   }
@@ -342,11 +345,14 @@ class TensorExprFuser {
     // group, so we can safely merge them into the fusion group subgraph.
     std::unordered_map<Value*, Value*> vmap;
     fusion_group = getOrCreateTensorExprSubgraph(fusion_group, vmap);
+    updateTypeinfoMapWithVmap(vmap);
+    vmap.clear();
     for (auto n : nodes_to_merge) {
       GRAPH_UPDATE("Merging ", getHeader(n));
       SubgraphUtils::mergeNodeIntoSubgraph(n, fusion_group, vmap);
     }
     updateTypeinfoMapWithVmap(vmap);
+    //printTypeInfoMap();
     return fusion_group;
   }
 
@@ -464,7 +470,7 @@ class TensorExprFuser {
   void printTypeInfoMap() {
     GRAPH_DEBUG("Typeinfo map:");
     for (const auto& kv : typeinfo_map_) {
-      GRAPH_DEBUG("%", kv.first->debugName(), " --> ", *kv.second);
+      GRAPH_DEBUG("%", kv.first->debugName(), "(", kv.first , ") ",  " --> ", *kv.second);
     }
   }
 
@@ -472,7 +478,7 @@ class TensorExprFuser {
     for (auto it = b->nodes().begin(); it != b->nodes().end(); it++) {
       if (it->kind() == prim::profile) {
         for (auto o : it->outputs()) {
-          GRAPH_DEBUG("TYPEINFO ERASE: %", o->debugName());
+          GRAPH_DEBUG("TYPEINFO ERASE: %", o->debugName(), "(", o , ") ");
           typeinfo_map_.erase(o);
         }
         if (it->outputs().size()) {
@@ -498,6 +504,15 @@ class TensorExprFuser {
         subgraph->inputs()[idx]->setType(
             typeinfo_map_.at(subgraph->inputs()[idx]));
         inputs_to_check.push_back(n->input(idx));
+      }
+      else {
+        if(!subgraph->inputs()[idx]->isCompleteTensor()) {
+          GRAPH_DUMP("ASSERTION", n->owningGraph());
+          printTypeInfoMap();
+
+          GRAPH_DEBUG("%", subgraph->inputs()[idx]->debugName(), "(", subgraph->inputs()[idx], ")", " of ", getHeader(subgraph->inputs()[idx]->node()), " doesn't have profiling info");
+          TORCH_INTERNAL_ASSERT(false);
+        }
       }
     }
 
@@ -535,9 +550,12 @@ class TensorExprFuser {
     // Fill in the false block. It should contain the unoptimized
     // copy of the fused subgraph.
     WithInsertPoint guard(false_block->return_node());
-    const auto subgraph_outputs =
-        insertGraph(*n->owningGraph(), *subgraph, n->inputs());
-    for (Value* output : subgraph_outputs) {
+    auto fallback = createFallbackGraph(subgraph->block(), n->inputs(), n->owningGraph());
+    n->owningGraph()->insertNode(fallback);
+    // const auto subgraph_outputs =
+    //     insertGraph(*n->owningGraph(), *subgraph, n->inputs());
+    // for (Value* output : subgraph_outputs) {
+    for (Value* output : fallback->outputs()) {
       false_block->registerOutput(output);
     }
 
@@ -614,7 +632,7 @@ RegisterOperators TensorExprOps({
     torch::jit::Operator(
         prim::TensorExprGroup,
         createTensorExprOp,
-        AliasAnalysisKind::PURE_FUNCTION),
+        c10::AliasAnalysisKind::INTERNAL_SPECIAL_CASE),
 });
 
 } // namespace jit
