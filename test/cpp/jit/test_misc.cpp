@@ -237,7 +237,7 @@ TEST(THNNConvTest, Basic) {
   assertAllClose(tensor_grads_out, expected_tensor_grads_out);
 }
 
-void testGradSum() {
+TEST(CustomFusionTest, GradSum) {
 
   auto graph_string = R"IR(
     graph(%0 : Tensor,
@@ -272,9 +272,9 @@ void testGradSum() {
   ge.run(stack);
   auto ta = stack.back().toTensor();
   auto ta_sizes = ta.sizes();
-  ASSERT_TRUE(ta.allclose(te));
   std::cerr <<  "te sizes = " << c10::Join(",", te_sizes) << std::endl;
   std::cerr <<  "ta sizes = " << c10::Join(",", ta_sizes) << std::endl;
+  AT_ASSERT(ta.allclose(te));
 }
 
 TEST(ATenNativeBatchNormTest, Basic) {
