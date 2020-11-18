@@ -90,6 +90,18 @@ c10::optional<at::Device> pickDeviceType(
 } // namespace jit
 } // namespace torch
 
+size_t normalizeAndCheckIndex(int64_t idx, int64_t list_size) {
+  if (idx < 0) {
+    // Handle negative indexing
+    idx = list_size + idx;
+  }
+
+  if (idx < 0 || idx >= list_size) {
+    AT_ERROR("Invalid index ", idx, " for list_size", list_size);
+  }
+  return static_cast<size_t>(idx);
+}
+
 static at::ScalarType tensorType(Tensor* t) {
   return static_cast<at::ScalarType>(t->body()->dtype().scalar_type());
 }
@@ -331,8 +343,8 @@ std::vector<ExprHandle> TensorExprKernel::inferSizesForValue(
       auto const& n = v->node();
       auto inputs = n->input(0)->node()->inputs();
       TORCH_INTERNAL_ASSERT(n->input(1)->node()->kind() == prim::Constant);
-      int64_t dim = n->input(1)->node()->i(attr::value);
-
+      int64_t rank = *inputs[0]->type()->cast<TensorType>()->sizes().size();
+      int64_t dim = normalizeAndCheckIndex(n->input(1)->node()->i(attr::value), rank);
       ExprHandle concat_size = IntImm::make(0);
       for (auto input : inputs) {
         concat_size = concat_size + sizesForValue(input)[dim];
@@ -1659,12 +1671,13 @@ Tensor* TensorExprKernel::computeSoftmax(const torch::jit::Value* v) {
   // We do not handle None for dims (input 1) because that is supposed to
   // be deprecated.
   TORCH_INTERNAL_ASSERT(v->node()->input(1)->node()->kind() == prim::Constant);
-  size_t softmax_dim = v->node()->input(1)->node()->i(attr::value);
-  TORCH_INTERNAL_ASSERT(softmax_dim < output_dims.size());
-
+  int64_t rank = *v->node()->input(0)->type()->cast<TensorType>()->sizes().size();
+  int64_t softmax_dim = v->node()->input(1)->node()->i(attr::value);
+  size_t norm_softmax_dim = normalizeAndCheckIndex(softmax_dim, rank);
+  GRAPH_DEBUG("norm_softmax_dim = ", norm_softmax_dim);
   std::vector<DimArg> non_softmax_dims;
   for (size_t i = 0; i < output_dims.size(); ++i) {
-    if (i != softmax_dim) {
+    if (i != norm_softmax_dim) {
       non_softmax_dims.push_back(output_dims[i]);
     }
   }

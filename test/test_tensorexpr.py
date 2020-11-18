@@ -1140,7 +1140,11 @@ class TestTensorExprFuser(BaseTestClass):
             b = F.softmax(y, dim=0, dtype=torch.float32)
             c = F.softmax(x, dim=1, dtype=torch.float32)
             d = F.softmax(y, dim=1, dtype=torch.float32)
-            return a + b + c + d
+            e = F.softmax(x, dim=-2, dtype=torch.float32)
+            f = F.softmax(y, dim=-2, dtype=torch.float32)
+            g = F.softmax(x, dim=-1, dtype=torch.float32)
+            h = F.softmax(y, dim=-1, dtype=torch.float32)
+            return a + b + c + d + e + f + g + h
 
         old = torch._C._jit_set_texpr_reductions_enabled(True)
         traced = torch.jit.trace(test, (torch.randn(2, 3, device=device), torch.randn(2, 3, device=device)))

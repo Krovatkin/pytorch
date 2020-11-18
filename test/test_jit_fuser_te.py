@@ -111,7 +111,7 @@ class TestTEFuser(JitTestCase):
     @unittest.skipIf(IS_SANDCASTLE, "NYI: fuser CPU support for Sandcastle")
     def test_sum_dim(self):
         def func(x):
-            return x.sum((0, )) * 2
+            return x.sum((-2, )) * 2
 
         with texpr_reductions_enabled():
             a = torch.tensor(list(x for x in range(0, 15)), dtype=torch.float, device='cpu')
@@ -121,6 +121,20 @@ class TestTEFuser(JitTestCase):
             fusion_groups = self.findFusionGroups(graph)
             self.assertEqual(len(fusion_groups), 1)
             self.assertEqual(scripted(a), func(a))
+
+    @unittest.skipIf(IS_SANDCASTLE, "NYI: fuser CPU support for Sandcastle")
+    def test_unsqueeze(self):
+        def func(x, y):
+            return x.unsqueeze(dim = -2) + y + y
+
+        x = torch.ones(5)
+        y = torch.ones(3, 5)
+
+        scripted = self.checkScript(func, (x,y))
+        graph = scripted.graph_for(x,y)
+        fusion_groups = self.findFusionGroups(graph)
+        self.assertEqual(len(fusion_groups), 1)
+        self.assertEqual(scripted(x,y), func(x,y))
 
     @unittest.skipIf(IS_SANDCASTLE, "NYI: fuser CPU support for Sandcastle")
     def test_sum_keepdim_cast(self):
@@ -228,6 +242,26 @@ class TestTEFuser(JitTestCase):
                     fusion_output.sum(), local_fusion_inputs, allow_unused=True, retain_graph=True)
                 grads_half = [t.half() for t in grads]
                 self.assertEqual(grads_half, fusion_grads)
+
+
+    @unittest.skipIf(not RUN_CUDA, "fuser requires CUDA")
+    def test_checks_cat_neg_inputs(self):
+        # We shouldn't treat cat nodes as broadcasting. All their inputs
+        # need to be checked for having the same map size, before we can
+        # run the kernel.
+        def f(x, y):
+            c = x + y
+            d = x.relu()
+            return torch.cat([c, d], dim=-2)
+
+        # NOTE: y is broadcastable to x, but output of f(x, y) should have
+        # shape 3x4, and not 4x4.
+        x = torch.randn(2, 4, dtype=torch.float, device='cuda')
+        y = torch.randn(1, 4, dtype=torch.float, device='cuda')
+
+        scripted = self.checkScript(f, (x, y))
+        self.assertEqual(scripted(x, y).shape, (3, 4))
+        self.assertAllFused(scripted.graph_for(x, y))
 
     @unittest.skipIf(not RUN_CUDA, "fuser requires CUDA")
     def test_checks_cat_inputs(self):
