@@ -181,7 +181,7 @@ void runPreAutodiffPassPipeline(std::shared_ptr<Graph>& graph) {
       "After CheckInplace (end of runPreAutodiffPassPipeline)\n", *graph);
 }
 
-void runDiffGraphPasses(std::shared_ptr<Graph>& graph) {
+void runDiffGraphPasses(std::shared_ptr<Graph>& graph, bool run_unguarded_passes = true) {
   GRAPH_DEBUG(
       "Before EliminateDeadCode (beginning of runDiffGraphPasses)\n", *graph);
   // runOptimization:
@@ -249,8 +249,12 @@ void runDiffGraphPasses(std::shared_ptr<Graph>& graph) {
       GRAPH_DEBUG(
           "After RemoveProfileNodesAndSpecializeTypes, before BatchMM\n",
           *graph);
-      // Rewrite subgraphs with many MMs into expressions that batch them.
-      BatchMM(graph);
+
+      if (run_unguarded_passes) {
+        // Rewrite subgraphs with many MMs into expressions that batch them.
+        BatchMM(graph);
+      }
+
       GRAPH_DEBUG("After BatchMM, before Fusion\n", *graph);
 
       FuseTensorExprs(graph, getFusionGroupInlining() ? 2 : 1);
@@ -263,8 +267,10 @@ void runDiffGraphPasses(std::shared_ptr<Graph>& graph) {
           "After RemoveTensorTypeSpecializations, before customPostPasses\n",
           *graph);
     } else {
-      // Rewrite subgraphs with many MMs into expressions that batch them.
-      BatchMM(graph);
+      if (run_unguarded_passes) {
+        // Rewrite subgraphs with many MMs into expressions that batch them.
+        BatchMM(graph);
+      }
       GRAPH_DEBUG("After BatchMM, before Fusion\n", *graph);
 
       FuseGraph(graph, true);
@@ -377,6 +383,15 @@ void ProfilingGraphExecutorImpl::runProfilingOptimizations(
     runNoGradOptimizations(copy);
   }
   EliminateDeadCode(copy);
+  auto num_fusion_groups = getFusionGroupCount();
+  static auto const ENABLE_NONDIFF = std::getenv("ENABLE_NONDIFF");
+  if (ENABLE_NONDIFF) {
+    runDiffGraphPasses(copy, false);
+  }
+  auto diff = getFusionGroupCount() - num_fusion_groups;
+  if (diff) {
+    std::cerr << "@#$ second pass added " << diff << std::endl;
+  }
   GRAPH_DEBUG("After runProfilingOptimizations:\n", *copy);
 }
 

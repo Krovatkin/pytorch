@@ -20,6 +20,12 @@ namespace jit {
 
 static bool texpr_reductions_enabled = false;
 
+thread_local size_t fusion_group_count = 0;
+
+size_t getFusionGroupCount() {
+  return fusion_group_count;
+}
+
 bool isSupportedForBlock(Node* node) {
   switch (node->kind()) {
     case aten::add:
@@ -956,6 +962,7 @@ class TensorExprFuser {
       }
     }
     for (Node* fusion_group : fusion_groups) {
+      fusion_group_count++;
       removeOutputsUsedOnlyInSize(fusion_group);
       guardFusionGroup(fusion_group);
     }
