@@ -5,14 +5,154 @@
 #include <gtest/gtest.h>
 
 #include <c10/macros/Macros.h>
+
 #include "test/cpp/tensorexpr/padded_buffer.h"
 #include "test/cpp/tensorexpr/test_base.h"
 #include "torch/csrc/jit/tensorexpr/ir_printer.h"
 
+#include "torch/csrc/jit/passes/utils/subgraph_utils.h"
+#include "torch/csrc/jit/runtime/graph_executor.h"
+#include "torch/csrc/jit/ir/irparser.h"
+#include "torch/csrc/jit/jit_log.h"
+#include "torch/csrc/jit/codegen/fuser/interface.h"
+#include "torch/csrc/jit/passes/tensorexpr_fuser.h"
+#include "test/cpp/jit/test_utils.h"
+#include <chrono>
 namespace torch {
 namespace jit {
 
 using namespace torch::jit::tensorexpr;
+
+static void wrapGraphWithIntWrapper(std::shared_ptr<Graph> graph) {
+
+  auto block = graph->block();
+  auto first_node = *block->nodes().begin();
+  auto iw_node = SubgraphUtils::createSingletonSubgraph(first_node, prim::IntWrapper);
+  //first_node->replaceAllUsesWith(iw_node);
+  for (auto it = iw_node->next()->iterator(); it != block->nodes().end();) {
+    auto to_merge = *it;
+    it++;
+    SubgraphUtils::mergeNodeIntoSubgraph(to_merge, iw_node);
+  }
+}
+
+static void wrapGraphWithIntWrapper2(std::shared_ptr<Graph> graph) {
+
+  // Merge everything into a single subgraph
+  bool first = true;
+  Node* subgraph;
+  for (auto it = graph->nodes().rbegin(); it != graph->nodes().rend();) {
+    if (first) {
+      subgraph = SubgraphUtils::createSingletonSubgraph(
+          *it, prim::IntWrapper);
+      it = ++subgraph->reverseIterator();
+      first = false;
+    }
+
+    SubgraphUtils::mergeNodeIntoSubgraph(*it, subgraph);
+    it = ++subgraph->reverseIterator();
+  }
+}
+
+TEST(FuserTest, TestSimpleIntWrapper) {
+  getProfilingMode() = true;
+  setTensorExprFuserEnabled(true);
+  setTexprReductionsEnabled(true);
+  torch::jit::overrideCanFuseOnCPU(true);
+
+  // const auto graph_string = R"IR(
+  //     graph(%0 : Tensor,
+  //           %1 : Tensor):
+  //       %2 : Tensor = aten::mul(%0, %1)
+  //       %3 : Tensor = aten::mul(%2, %1)
+  //       return (%3))IR";
+
+  const auto graph_string = R"IR(
+    graph(%0 : Tensor,
+          %1 : Tensor,
+          %2 : Tensor,
+          %3 : Tensor,
+          %4 : Tensor):
+      %5 : Tensor = aten::mm(%0, %3)
+      %6 : Tensor = aten::mm(%1, %4)
+      %7 : int = prim::Constant[value=1]()
+      %8 : Tensor = aten::add(%5, %6, %7)
+      %9 : Tensor, %10 : Tensor, %11 : Tensor, %12 : Tensor = prim::ConstantChunk[chunks=4, dim=1](%8)
+      %13 : Tensor = aten::sigmoid(%9)
+      %14 : Tensor = aten::sigmoid(%12)
+      %15 : Tensor = aten::tanh(%11)
+      %16 : Tensor = aten::sigmoid(%10)
+      %17 : Tensor = aten::mul(%16, %2)
+      %18 : Tensor = aten::mul(%13, %15)
+      %19 : int = prim::Constant[value=1]()
+      %20 : Tensor = aten::add(%17, %18, %19)
+      %21 : Tensor = aten::tanh(%20)
+      %22 : Tensor = aten::mul(%14, %21)
+      return (%22, %20))IR";
+
+  auto graph = std::make_shared<Graph>();        
+  torch::jit::parseIR(graph_string, &*graph);
+
+#define ENV_PARAM(NAME, DEFAULT_NUM) \
+  auto static const c_ ## NAME = std::getenv(#NAME); \
+  static const size_t NAME = c_ ## NAME ? std::atoi(c_ ## NAME) : DEFAULT_NUM; \
+  std::cout << #NAME << ": " << NAME << std::endl;
+
+  ENV_PARAM(batch_size, 1);
+  ENV_PARAM(input_size, 256);
+  ENV_PARAM(times, 1000);
+  
+  int hidden_size = 2 * input_size;
+
+  auto input = at::randn({batch_size, input_size}, at::kCUDA);
+  auto hx = at::randn({batch_size, hidden_size}, at::kCUDA);
+  auto cx = at::randn({batch_size, hidden_size}, at::kCUDA);
+  auto w_ih = at::randn({4 * hidden_size, input_size}, at::kCUDA).t();
+  auto w_hh = at::randn({4 * hidden_size, hidden_size}, at::kCUDA).t();
+
+  GraphExecutor ge(graph, "ge");
+  {
+    auto stack = Stack({input, hx, cx, w_ih, w_hh});
+    ge.run(stack);
+  }
+
+  {
+    auto stack = Stack({input, hx, cx, w_ih, w_hh});
+    ge.run(stack);
+  }
+
+  //time baseline
+
+
+  auto bench = [&](const std::string& name) {
+
+    
+    double cum = 0;
+    for (auto i = 0; i < times; i++) {
+      auto stack = Stack({input, hx, cx, w_ih, w_hh});
+      auto begin = std::chrono::high_resolution_clock::now();
+      ge.run(stack);
+      auto end = std::chrono::high_resolution_clock::now();
+      auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin);
+      cum += elapsed.count();
+    }
+
+    cum = cum * 1e-6 / times;
+    std::cout << name << ": " << cum << " us\n";
+    return cum;
+  };
+  auto baseline = bench("baseline");
+  {
+    auto stack = Stack({input, hx, cx, w_ih, w_hh});
+    ExecutionPlan& plan = const_cast<ExecutionPlan&>(ge.getPlanFor(stack, 0));
+    wrapGraphWithIntWrapper2(plan.graph);
+    plan.code = Code(plan.graph, "int wrapper");
+    ge.run(stack);
+    GRAPH_DUMP("INT WRAPPED: ", plan.graph);
+  }
+  auto int_wrap = bench("int_wrapped");
+  std::cout << "diff: " << ((int_wrap / baseline - 1) * 100) << std::endl;
+}
 
 TEST(ATen, _cast_Float) {
   KernelScope kernel_scope;

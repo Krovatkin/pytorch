@@ -6,6 +6,7 @@
 #include <queue>
 #include <utility>
 #include <vector>
+#include "ATen/core/interned_strings.h"
 
 namespace torch {
 namespace jit {
@@ -238,6 +239,7 @@ bool printerHasSpecialCaseFor(Symbol sym) {
       prim::CudaFusionGroup, // optimization pass adds it
       prim::CudaFusionGuard, // optimization pass adds it
       prim::TensorExprGroup, // optimization pass adds it
+      prim::IntWrapper, // optimization pass adds it
       prim::Load, // used in interpreter only
       prim::MMTreeReduce, // used as an optimization
       prim::MMBatchSide, // used as an optimization

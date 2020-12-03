@@ -14,6 +14,8 @@
 #include <torch/csrc/jit/runtime/operator_options.h>
 #include <torch/csrc/jit/tensorexpr/kernel.h>
 #include <torch/csrc/utils/memory.h>
+#include "ATen/core/interned_strings.h"
+#include "jit/runtime/interpreter.h"
 
 namespace torch {
 namespace jit {
@@ -1011,6 +1013,26 @@ Operation createTensorExprOp(const Node* node) {
     return 0;
   };
 }
+
+Operation createIntWrapper(const Node* node) {
+  auto kernel_graph = node->g(attr::Subgraph);
+  Code code(kernel_graph, "int_wrapper");
+  return [code](Stack* stack) {
+    RECORD_FUNCTION("IntWrapper", std::vector<c10::IValue>());
+      GRAPH_DEBUG("Running IntWrapper");
+      InterpreterState is(code);
+      is.run(*stack);
+      return 0;
+  };
+}
+
+RegisterOperators IntWrapperOps({
+    torch::jit::Operator(
+        prim::IntWrapper,
+        createIntWrapper,
+        AliasAnalysisKind::INTERNAL_SPECIAL_CASE),
+});
+
 
 RegisterOperators TensorExprOps({
     torch::jit::Operator(

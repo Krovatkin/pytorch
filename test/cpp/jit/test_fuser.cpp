@@ -53,6 +53,8 @@
 #include <utility>
 #include <vector>
 
+#include "torch/csrc/jit/jit_log.h"
+
 namespace torch {
 namespace jit {
 
