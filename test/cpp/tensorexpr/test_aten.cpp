@@ -54,7 +54,88 @@ static void wrapGraphWithIntWrapper2(std::shared_ptr<Graph> graph) {
   }
 }
 
+// const auto graph_string = R"IR(
+//     graph(%0 : Tensor,
+//           %1 : Tensor):
+//       %2 : Tensor = aten::mul(%0, %1)
+//       %3 : Tensor = aten::mul(%2, %1)
+//       return (%3))IR";
+
 TEST(FuserTest, TestSimpleIntWrapper) {
+  getProfilingMode() = true;
+  setTensorExprFuserEnabled(true);
+  setTexprReductionsEnabled(true);
+  torch::jit::overrideCanFuseOnCPU(true);
+
+const auto graph_string = R"IR(
+    graph(%0 : Tensor,
+          %1 : Tensor):
+      %2 : int = prim::Constant[value=1]()
+      %3 : Tensor = aten::add(%0, %1, %2)
+      %4 : Tensor = aten::add(%3, %1, %2)
+      return (%4))IR";
+
+  auto graph = std::make_shared<Graph>();        
+  torch::jit::parseIR(graph_string, &*graph);
+
+#define ENV_PARAM(NAME, DEFAULT_NUM) \
+  auto static const c_ ## NAME = std::getenv(#NAME); \
+  static const size_t NAME = c_ ## NAME ? std::atoi(c_ ## NAME) : DEFAULT_NUM; \
+  std::cout << #NAME << ": " << NAME << std::endl;
+
+  ENV_PARAM(batch_size, 1);
+  ENV_PARAM(times, 1000);
+  
+
+  auto a = at::randn({batch_size}, at::kCUDA);
+  auto b = at::randn({batch_size}, at::kCUDA);
+
+  GraphExecutor ge(graph, "ge");
+  {
+    auto stack = Stack({a, b});
+    ge.run(stack);
+  }
+
+  {
+    auto stack = Stack({a, b});
+    ge.run(stack);
+  }
+
+  //time baseline
+
+
+  auto bench = [&](const std::string& name) {
+
+    
+    double cum = 0;
+    for (auto i = 0; i < times; i++) {
+      auto stack = Stack({a, b});
+      auto begin = std::chrono::high_resolution_clock::now();
+      ge.run(stack);
+      auto end = std::chrono::high_resolution_clock::now();
+      auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin);
+      cum += elapsed.count();
+    }
+
+    cum = cum * 1e-6 / times;
+    std::cout << name << ": " << cum << " us\n";
+    return cum;
+  };
+  auto baseline = bench("baseline");
+  {
+    auto stack = Stack({a, b});
+    ExecutionPlan& plan = const_cast<ExecutionPlan&>(ge.getPlanFor(stack, 0));
+    wrapGraphWithIntWrapper2(plan.graph);
+    plan.code = Code(plan.graph, "int wrapper");
+    ge.run(stack);
+    GRAPH_DUMP("INT WRAPPED: ", plan.graph);
+  }
+  auto int_wrap = bench("simple_wrapped");
+  std::cout << "diff: " << ((int_wrap / baseline - 1) * 100) << std::endl;
+}
+
+
+TEST(FuserTest, TestLSTMIntWrapper) {
   getProfilingMode() = true;
   setTensorExprFuserEnabled(true);
   setTexprReductionsEnabled(true);
@@ -150,7 +231,7 @@ TEST(FuserTest, TestSimpleIntWrapper) {
     ge.run(stack);
     GRAPH_DUMP("INT WRAPPED: ", plan.graph);
   }
-  auto int_wrap = bench("int_wrapped");
+  auto int_wrap = bench("lstm_wrapped");
   std::cout << "diff: " << ((int_wrap / baseline - 1) * 100) << std::endl;
 }
 
