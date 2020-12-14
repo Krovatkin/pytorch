@@ -133,6 +133,9 @@ class DeadCodeEliminator {
       // the loop body.
       liveValues_.insert(loop.nextCond());
     } else {
+      if (outerNode->outputs().size() != node->inputs().size()) {
+        std::cerr << "return node: " << *node;
+      }
       AT_ASSERT(outerNode->outputs().size() == node->inputs().size());
       for (size_t i = 0; i < outerNode->outputs().size(); i++) {
         auto innerOutput = node->inputs()[i];

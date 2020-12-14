@@ -29,6 +29,8 @@
 #include <torch/csrc/jit/passes/shape_analysis.h>
 #include <torch/csrc/jit/passes/specialize_autogradzero.h>
 #include <torch/csrc/jit/passes/tensorexpr_fuser.h>
+#include "ATen/core/interned_strings.h"
+#include <torch/csrc/jit/passes/utils/subgraph_utils.h>
 
 C10_DEFINE_bool(
     torch_jit_enable_new_executor,
@@ -179,7 +181,144 @@ void runPreAutodiffPassPipeline(std::shared_ptr<Graph>& graph) {
       "After CheckInplace (end of runPreAutodiffPassPipeline)\n", *graph);
 }
 
+
+  void removeTensorTypeSpecialization2(Value* v) {
+    if (!v->type()->cast<TensorType>()) {
+      return;
+    }
+    // Constants & TensorExprGroup will always produce specialized tensor type,
+    // TypeCheck are inserted by this pass and only used by fusion groups that
+    // insert proper guards
+    if (v->node()->kind() == prim::Constant ||
+        v->node()->kind() == prim::TypeCheck ||
+        v->node()->kind() == prim::TensorExprGroup) {
+      return;
+    }
+    v->setType(TensorType::get());
+  }
+
+  void removeTensorTypeSpecializations2(Block* block) {
+    for (Value* v : block->inputs()) {
+      removeTensorTypeSpecialization2(v);
+    }
+    for (Node* n : block->nodes()) {
+      for (Block* b : n->blocks()) {
+        removeTensorTypeSpecializations2(b);
+      }
+      for (Value* v : n->outputs()) {
+        removeTensorTypeSpecialization2(v);
+      }
+    }
+  }
+
+  static void guardDifferentiableGraph(Node* fusion_group) {
+    GRAPH_DEBUG("Inserting a typecheck guard for a node", *fusion_group);
+    auto subgraph = SubgraphUtils::getSubgraph(fusion_group);
+
+    // Fixup types of the subgraph inputs
+    std::vector<Value*> inputs_to_check;
+    for (Value* input : fusion_group->inputs()) {
+      // We only check inputs of the fusion group and expect NNC to infer
+      // intermediates and outputs shapes
+      if (!input->type()->cast<TensorType>()) {
+        continue;
+      }
+
+      // fusion outputs are already guarded
+      if (input->node()->kind() == prim::Constant ||
+          input->node()->kind() == prim::DifferentiableGraph) {
+        continue;
+      }
+      inputs_to_check.push_back(input);
+    }
+
+    if (!inputs_to_check.size()) {
+      return;
+    }
+
+    // Add prim::TypeCheck node
+    //
+    // TypeCheck nodes  look like the following:
+    //   %out1 : Float(2, 3), %out2 : Int(10, 30), %types_match : bool =
+    //   prim::TypeCheck(%inp1 : Tensor, %inp2 : Tensor)
+    //
+    // They have N inputs whose types we are going to check and N+1 outputs. The
+    // first N outputs specify expected types and N+1-th output holds the result
+    // of the check (bool).
+    Node* typecheck_node =
+        fusion_group->owningGraph()
+            ->create(
+                prim::TypeCheck, inputs_to_check, inputs_to_check.size() + 1)
+            ->insertBefore(fusion_group);
+    Value* typecheck_result = typecheck_node->output(inputs_to_check.size());
+
+    std::unordered_map<Value*, Value*> typechecked_inputs;
+    for (size_t i = 0; i < typecheck_node->inputs().size(); ++i) {
+      typechecked_inputs[typecheck_node->input(i)] = typecheck_node->output(i);
+    }
+
+    // Fixup types of the typecheck node outputs, which are used by the op in
+    // execution
+    typecheck_node->output(inputs_to_check.size())->setType(BoolType::get());
+    for (size_t i = 0; i < typecheck_node->inputs().size(); ++i) {
+      typecheck_node->output(i)->setType(typecheck_node->input(i)->type());
+    }
+
+    // Insert if
+    auto versioning_if =
+        fusion_group->owningGraph()
+            ->create(
+                prim::If, {typecheck_result}, fusion_group->outputs().size())
+            ->insertAfter(typecheck_node);
+    for (size_t idx = 0; idx < fusion_group->outputs().size(); ++idx) {
+      versioning_if->output(idx)->setType(fusion_group->output(idx)->type());
+      fusion_group->output(idx)->replaceAllUsesWith(versioning_if->output(idx));
+    }
+    auto true_block = versioning_if->addBlock();
+    auto false_block = versioning_if->addBlock();
+
+    // Fill in the false block. It should contain the unoptimized
+    // copy of the fused subgraph.
+    WithInsertPoint guard(false_block->return_node());
+    const auto subgraph_outputs = insertGraph(
+        *fusion_group->owningGraph(), *subgraph, fusion_group->inputs());
+    for (Value* output : subgraph_outputs) {
+      false_block->registerOutput(output);
+    }
+
+    // types get copied to the fallback graph, so remove specializations before
+    // replacing
+    removeTensorTypeSpecializations2(false_block);
+    replaceBlockWithFallbackGraph(false_block, fusion_group->inputs());
+
+    // Fill in the true block. It has all inputs type-checked and its
+    // body should be the fusion group node.
+    fusion_group->moveBefore(true_block->return_node());
+    for (size_t idx = 0; idx < fusion_group->inputs().size(); ++idx) {
+      if (typechecked_inputs.count(fusion_group->input(idx))) {
+        fusion_group->replaceInput(
+            idx, typechecked_inputs.at(fusion_group->input(idx)));
+      }
+    }
+    for (Value* output : fusion_group->outputs()) {
+      true_block->registerOutput(output);
+    }
+  }
+
 void runDiffGraphPasses(std::shared_ptr<Graph>& graph) {
+
+  if (tensorExprFuserEnabled()) {
+    // Remove prim::profile nodes and embed the profile info directly in the
+    // IR in value types. We're doing such transformation as optimizations
+    // that try to merge/fuse nodes in the graph (e.g. BatchMM and GraphFuser)
+    // work worse in the presence of intermittent prim::profile nodes.
+    // Optimizations relying on the type info are also responsible for
+    // inserting proper type checks. Once we're done with these optimizations
+    // we will wipe the tensor type information from the IR, so that it's not
+    // accidentally used by any other pass.
+    RemoveProfileNodesAndSpecializeTypes(graph);
+  }
+
   GRAPH_DEBUG(
       "Before EliminateDeadCode (beginning of runDiffGraphPasses)\n", *graph);
   // runOptimization:
@@ -235,15 +374,6 @@ void runDiffGraphPasses(std::shared_ptr<Graph>& graph) {
     GRAPH_DEBUG("After LowerSimpleTuples\n", *graph);
 
     if (tensorExprFuserEnabled()) {
-      // Remove prim::profile nodes and embed the profile info directly in the
-      // IR in value types. We're doing such transformation as optimizations
-      // that try to merge/fuse nodes in the graph (e.g. BatchMM and GraphFuser)
-      // work worse in the presence of intermittent prim::profile nodes.
-      // Optimizations relying on the type info are also responsible for
-      // inserting proper type checks. Once we're done with these optimizations
-      // we will wipe the tensor type information from the IR, so that it's not
-      // accidentally used by any other pass.
-      RemoveProfileNodesAndSpecializeTypes(graph);
       GRAPH_DEBUG(
           "After RemoveProfileNodesAndSpecializeTypes, before BatchMM\n",
           *graph);
@@ -256,7 +386,7 @@ void runDiffGraphPasses(std::shared_ptr<Graph>& graph) {
           "After Fusion, before RemoveTensorTypeSpecializations\n", *graph);
 
       // Wipe tensor type info from the IR
-      RemoveTensorTypeSpecializations(graph);
+      // RemoveTensorTypeSpecializations(graph);
       GRAPH_DEBUG(
           "After RemoveTensorTypeSpecializations, before customPostPasses\n",
           *graph);
@@ -355,20 +485,91 @@ void ProfilingGraphExecutorImpl::runProfilingOptimizations(
     size_t idx = 0;
     for (Node* dnode : diff_nodes) {
       GRAPH_DEBUG("Optimizing diff node ", idx);
+
+      auto unopt_dnode = copy->createClone(dnode, [&](Value* v) { return v; });
       auto diff_graph = std::move(dnode->g(attr::Subgraph));
+      unopt_dnode->g_(attr::Subgraph, nullptr);
+      auto unopt_diff_graph = diff_graph->copy();
+      
+
+      
+      // we specialize before differntiate so we can avoid
+      // computing gradients for tensors that don't require them
+      if (tensorExprFuserEnabled()) {
+        RemoveProfileNodesAndSpecializeTypes(diff_graph);
+      }
       Gradient gradient = differentiate(diff_graph);
       GRAPH_DEBUG("Forward graph:\n", *(gradient.f));
       GRAPH_DEBUG("Backward graph:\n", *(gradient.df));
       runDiffGraphPasses(gradient.f);
-      // replaces fallback graphs inserted by TE Fuser
-      replaceFallbackGraphWithFallbackFunction(gradient.f->block());
       packGradient(gradient, dnode);
-      GRAPH_DEBUG("Finished optimizing diff node ", idx++);
+
+      RemoveProfilingNodes(unopt_diff_graph);
+      Gradient unopt_gradient = differentiate(unopt_diff_graph);
+      packGradient(unopt_gradient, unopt_dnode);
+
+
+    // Fixup types of the subgraph inputs
+    std::vector<Value*> inputs_to_check;
+    for (Value* input : dnode->inputs()) {
+      // We only check inputs of the fusion group and expect NNC to infer
+      // intermediates and outputs shapes
+      // TODO also check NumberTypes
+      if (!input->type()->cast<TensorType>()) {
+        continue;
+      }
+
+      if (input->node()->kind() == prim::Constant) {
+        continue;
+      }
+      inputs_to_check.push_back(input);
     }
-    InlineAutodiffSubgraphs(
-        copy,
-        getAutodiffSubgraphInlining() ? autodiffSubgraphInlineThreshold : 1);
+    if (!inputs_to_check.size()) {
+      return;
+    }
+
+    Node* typecheck_node =
+        copy->create(
+                prim::TypeCheck, inputs_to_check, inputs_to_check.size() + 1)
+            ->insertBefore(dnode);
+    Value* typecheck_result = typecheck_node->output(inputs_to_check.size());
+
+    auto versioning_if =
+    copy->create(
+            prim::If, {typecheck_result}, dnode->outputs().size())
+        ->insertAfter(typecheck_node);
+
+
+    auto true_block = versioning_if->addBlock();
+    auto false_block = versioning_if->addBlock();
+    false_block->appendNode(unopt_dnode);
+    
+    for (auto v: unopt_dnode->outputs()) {
+      false_block->registerOutput(v);
+    }
+
+    for (size_t idx = 0; idx < dnode->outputs().size(); ++idx) {
+      versioning_if->output(idx)->setType(dnode->output(idx)->type());
+      dnode->output(idx)->replaceAllUsesWith(versioning_if->output(idx));
+    }
+
+    dnode->moveBefore(*true_block->nodes().begin());
+    for (auto v: dnode->outputs()) {
+      true_block->registerOutput(v);
+    }
+
+    GRAPH_DEBUG("Before replaceFallbackGraphWithFallbackFunction graph:\n", *copy);
+    replaceBlockWithFallbackGraph(false_block, dnode->inputs());
+    replaceFallbackGraphWithFallbackFunction(false_block);       
+    GRAPH_DEBUG("After replaceFallbackGraphWithFallbackFunction graph:\n", *copy);
+    
+    GRAPH_DEBUG("Finished optimizing diff node ", idx++);
+    }
     RemoveProfilingNodes(copy);
+    // InlineAutodiffSubgraphs(
+    //     copy,
+    //     getAutodiffSubgraphInlining() ? autodiffSubgraphInlineThreshold : 1);
+    
     GRAPH_DEBUG(
         "After InlineAutodiffSubgraphs and Removing Profiling Nodes\n", *copy);
   } else {

@@ -987,7 +987,7 @@ class TensorExprFuser {
     }
     for (Node* fusion_group : fusion_groups) {
       removeOutputsUsedOnlyInSize(fusion_group);
-      guardFusionGroup(fusion_group);
+      // guardFusionGroup(fusion_group);
     }
   }
 

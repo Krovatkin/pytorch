@@ -1416,6 +1416,9 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
                   (!frames.back().symbols2dims.bindSymbolicShapes(
                        t.sizes(), expected_type->symbolic_sizes()) ||
                    !expected_type->matchTensor(t))) {
+                
+                int rg = expected_type->requiresGrad() ? *expected_type->requiresGrad() : -1;
+                GRAPH_DEBUG("TYPECHECK failed t.req_grad = ", t.requires_grad(), " , expected.req_grad = ",  rg);
                 push(stack, false);
                 break;
               }

@@ -14,6 +14,7 @@
 #include <torch/csrc/jit/runtime/symbolic_script.h>
 #include <algorithm>
 #include <memory>
+#include "ATen/core/interned_strings.h"
 
 namespace torch {
 namespace jit {
@@ -393,6 +394,15 @@ static ReverseDetails addReverseInline(Gradient& grad_desc) {
   auto outputs = graph.outputs();
   for (size_t i = 0, num_outputs = outputs.size(); i < num_outputs; ++i) {
     Value* output = outputs[i];
+    
+    // check profiling information and skip the outputs that don't require gradients
+    // if (output->node()->kind() == prim::profile) {
+    //   auto t = output->node()->ty(attr::profiled_type)->expect<TensorType>();
+    //   if (!t->requires_grad()) {
+    //     continue;
+    //   }
+    // }
+
     if (!output->requires_grad())
       continue;
     Value* output_grad = reverse_block->addInput()->setType(output->type());
