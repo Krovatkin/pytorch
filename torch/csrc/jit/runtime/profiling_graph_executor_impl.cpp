@@ -499,6 +499,7 @@ void ProfilingGraphExecutorImpl::runProfilingOptimizations(
         RemoveProfileNodesAndSpecializeTypes(diff_graph);
       }
       Gradient gradient = differentiate(diff_graph);
+
       std::vector<TypePtr> profiled_types;
       for (auto i : gradient.f->inputs()) {
         profiled_types.push_back(i->type());
@@ -515,7 +516,10 @@ void ProfilingGraphExecutorImpl::runProfilingOptimizations(
 
     // Fixup types of the subgraph inputs
     std::vector<Value*> inputs_to_check;
-    for (Value* input : dnode->inputs()) {
+    std::vector<size_t> input_indices_to_check;
+    //for (Value* input : dnode->inputs()) {
+    for (size_t i = 0; i < dnode->inputs().size(); i++) {
+      Value* input = dnode->input(i);
       // We only check inputs of the fusion group and expect NNC to infer
       // intermediates and outputs shapes
       // TODO also check NumberTypes
@@ -527,13 +531,13 @@ void ProfilingGraphExecutorImpl::runProfilingOptimizations(
         continue;
       }
       inputs_to_check.push_back(input);
+      input_indices_to_check.push_back(i);
     }
+
     if (!inputs_to_check.size()) {
       return;
     }
 
-
-    
     Node* typecheck_node =
         copy->create(
                 prim::TypeCheck, inputs_to_check, inputs_to_check.size() + 1)
@@ -574,10 +578,10 @@ void ProfilingGraphExecutorImpl::runProfilingOptimizations(
     // Fixup types of the typecheck node outputs, which are used by the op in
     // execution
     auto opt_graph = dnode->g(attr::Subgraph);
-    for (size_t i = 0; i < inputs_to_check.size(); ++i) {
-      typecheck_node->output(i)->setType(profiled_types[i]);
-      GRAPH_DEBUG("Replacing %", dnode->input(i)->debugName(), " with ", typecheck_node->output(i)->debugName(), " after ", *typecheck_node);
-      dnode->replaceInput(i, typecheck_node->output(i));
+    for (size_t i = 0; i < input_indices_to_check.size(); ++i) {
+      typecheck_node->output(i)->setType(profiled_types[input_indices_to_check[i]]);
+      GRAPH_DEBUG("Replacing %", dnode->input(input_indices_to_check[i])->debugName(), " with ", typecheck_node->output(i)->debugName(), " after ", *typecheck_node);
+      dnode->replaceInput(input_indices_to_check[i], typecheck_node->output(i));
     }
     
     GRAPH_DEBUG("Finished optimizing diff node ", idx++);
