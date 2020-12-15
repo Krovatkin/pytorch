@@ -499,6 +499,10 @@ void ProfilingGraphExecutorImpl::runProfilingOptimizations(
         RemoveProfileNodesAndSpecializeTypes(diff_graph);
       }
       Gradient gradient = differentiate(diff_graph);
+      std::vector<TypePtr> profiled_types;
+      for (auto i : gradient.f->inputs()) {
+        profiled_types.push_back(i->type());
+      }
       GRAPH_DEBUG("Forward graph:\n", *(gradient.f));
       GRAPH_DEBUG("Backward graph:\n", *(gradient.df));
       runDiffGraphPasses(gradient.f);
@@ -528,11 +532,14 @@ void ProfilingGraphExecutorImpl::runProfilingOptimizations(
       return;
     }
 
+
+    
     Node* typecheck_node =
         copy->create(
                 prim::TypeCheck, inputs_to_check, inputs_to_check.size() + 1)
             ->insertBefore(dnode);
     Value* typecheck_result = typecheck_node->output(inputs_to_check.size());
+    typecheck_result->setType(BoolType::get());
 
     auto versioning_if =
     copy->create(
@@ -562,6 +569,16 @@ void ProfilingGraphExecutorImpl::runProfilingOptimizations(
     replaceBlockWithFallbackGraph(false_block, dnode->inputs());
     replaceFallbackGraphWithFallbackFunction(false_block);       
     GRAPH_DEBUG("After replaceFallbackGraphWithFallbackFunction graph:\n", *copy);
+
+    GRAPH_DUMP("Before fix types: ", copy);
+    // Fixup types of the typecheck node outputs, which are used by the op in
+    // execution
+    auto opt_graph = dnode->g(attr::Subgraph);
+    for (size_t i = 0; i < inputs_to_check.size(); ++i) {
+      typecheck_node->output(i)->setType(profiled_types[i]);
+      GRAPH_DEBUG("Replacing %", dnode->input(i)->debugName(), " with ", typecheck_node->output(i)->debugName(), " after ", *typecheck_node);
+      dnode->replaceInput(i, typecheck_node->output(i));
+    }
     
     GRAPH_DEBUG("Finished optimizing diff node ", idx++);
     }
