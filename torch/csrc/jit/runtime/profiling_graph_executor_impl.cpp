@@ -129,12 +129,7 @@ void guardDifferentiableGraph(Node* dnode) {
     }
   }
   insertTypeGuard(dnode, [](const TensorTypePtr& t) {
-    TORCH_INTERNAL_ASSERT(
-        t->requiresGrad(),
-        "profiler did not say whether grad is required"); // i.e. we want the
-                                                          // optional to be
-                                                          // defined
-    return TensorType::get()->withRequiresGrad(t->requiresGrad());
+    return TensorType::get()->withRequiresGrad(t->requiresGrad().has_value() ? *t->requiresGrad(): true);
   });
 }
 
@@ -570,7 +565,7 @@ const ExecutionPlan& ProfilingGraphExecutorImpl::getPlanFor(
   std::lock_guard<std::mutex> lock(compile_mutex);
 
   // IMPORTANT: This is a hot path of calling a torchscript function. Try not to
-  // add any code above this.
+  // add any code abovehis.
   if (optimized_plan_) {
     return *optimized_plan_;
   }
