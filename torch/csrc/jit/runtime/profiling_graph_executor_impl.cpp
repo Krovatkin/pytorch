@@ -333,7 +333,7 @@ void runDiffGraphPasses(std::shared_ptr<Graph>& graph) {
         "After EliminateCommonSubexpression, before PeepholeOptimize\n",
         *graph);
 
-    PeepholeOptimize(graph);
+    PeepholeOptimize(graph, true);
     GRAPH_DEBUG("After PeepholeOptimize, before ConstantPropagation\n", *graph);
     ConstantPropagation(graph);
     GRAPH_DEBUG("After ConstantPropagation, before ConstantPooling\n", *graph);
@@ -345,7 +345,7 @@ void runDiffGraphPasses(std::shared_ptr<Graph>& graph) {
     // run again with unrolled loops
     RemoveListMutation(graph);
     GRAPH_DEBUG("After RemoveListMutation, before PeepholeOptimize\n", *graph);
-    PeepholeOptimize(graph);
+    PeepholeOptimize(graph, true);
     GRAPH_DEBUG("After PeepholeOptimize, before ConstantPropagation\n", *graph);
     ConstantPropagation(graph);
     GRAPH_DEBUG(
