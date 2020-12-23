@@ -6,7 +6,7 @@ import sys
 import json
 import copy
 import time
-
+import torch.autograd.profiler as profiler
 from .fuser import set_fuser
 from .runner import get_nn_runners
 
@@ -73,7 +73,8 @@ def trainbench(name, rnn_creator, nloops=100, warmup=10,
         gc.collect()
 
         fwd_start_event.record()
-        forward_output = modeldef.forward(*modeldef.inputs)
+        with profiler.record_function("modeldef.forward"):
+            forward_output = modeldef.forward(*modeldef.inputs)
         fwd_end_event.record()
 
         # XXX: Use if need to print something
@@ -167,7 +168,9 @@ def bench(rnn_runners, group_name, print_json=False, sep=' ', **params):
     for name, creator, context in rnn_runners:
         with context():
             try:
-                result = trainbench(name, creator, **params)
+                with profiler.profile() as prof:
+                    result = trainbench(name, creator, **params)
+                prof.export_chrome_trace(f"{name}.json")
                 # Replace the value of info_fwd and info_bwd to None
                 result_with_no_info = result._replace(
                     info_fwd='None', info_bwd='None')
