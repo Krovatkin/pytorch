@@ -543,14 +543,19 @@ RegisterOperators reg(
            }
          },
          aliasAnalysisSpecialCase()),
-     Operator(
+      Operator(
          "aten::_grad_sum_to_size(Tensor(a) self, int[]? size) -> Tensor(a)",
          [](Stack* stack) {
            IValue self, size;
            pop(stack, self, size);
            if (size.isNone()) {
+             auto shape_str = c10::Join("x", self.toTensor().sizes());
+             std::cerr << "aten::_grad_sum_to_size," << shape_str << ",[]\n";
              push(stack, std::move(self));
            } else {
+             auto shape_str = c10::Join("x", self.toTensor().sizes());
+             auto axes_str = c10::Join("x", size.toIntVector());
+             std::cerr << "aten::_grad_sum_to_size," << shape_str << "," << axes_str << "\n";
              push(stack, at::sum_to(self.toTensor(), size.toIntVector()));
            }
          },
