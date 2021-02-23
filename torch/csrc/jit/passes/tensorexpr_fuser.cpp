@@ -1128,6 +1128,7 @@ void FuseTensorExprs(
     size_t min_group_size,
     bool disable_shape_checks) {
   GRAPH_DUMP("Before TExprFuser: ", graph);
+  RECORD_FUNCTION("compiler::FuseTensorExprs", std::vector<c10::IValue>());
 
   // Temporary change for Block code generation.
   if (tensorexpr::getTEGenerateBlockCode()) {
@@ -1147,6 +1148,7 @@ void FuseTensorExprs(
 }
 
 Operation createTensorExprOp(const Node* node) {
+  RECORD_FUNCTION("compiler::createTensorExprOp", std::vector<c10::IValue>());
   auto kernel =
       std::make_shared<tensorexpr::TensorExprKernel>(node->g(attr::Subgraph));
   return [kernel](Stack* stack) {

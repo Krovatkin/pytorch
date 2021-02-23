@@ -120,6 +120,7 @@ static bool needsGradientInProfilingMode(Block* b) {
 }
 
 bool guardDifferentiableGraph(Node* dnode) {
+  RECORD_FUNCTION("compiler::guardDifferentiableGraph", std::vector<c10::IValue>());
   auto gi = dnode->g(attr::Subgraph)->inputs();
   bool all_inputs_seen = true;
   for (size_t i = 0; i < gi.size(); i++) {
@@ -190,6 +191,7 @@ void runNooptPassPipeline(std::shared_ptr<Graph>& graph) {
 }
 
 void runPreAutodiffPassPipeline(std::shared_ptr<Graph>& graph) {
+  RECORD_FUNCTION("compiler::runPreAutodiffPassPipeline", std::vector<c10::IValue>());
   GRAPH_DEBUG(
       "Before InsertGuards (beginning of runPreAutodiffPassPipeline)\n",
       *graph);
@@ -267,6 +269,7 @@ void runPreAutodiffPassPipeline(std::shared_ptr<Graph>& graph) {
 }
 
 void runDiffGraphPasses(std::shared_ptr<Graph>& graph) {
+  RECORD_FUNCTION("compiler::runDiffGraphPasses", std::vector<c10::IValue>());
   GRAPH_DEBUG(
       "Before EliminateDeadCode (beginning of runDiffGraphPasses)\n", *graph);
   // runOptimization:
@@ -548,10 +551,10 @@ const ExecutionPlan& ProfilingGraphExecutorImpl::getOptimizedPlanFor(
     Stack& stack,
     size_t remaining_bailout_depth) {
   GRAPH_DEBUG("Running ProfilingGraphExecutorImpl ", this);
-
   // no opt mode
   if (!getGraphExecutorOptimize()) {
     if (!fallback_plan_) {
+      RECORD_FUNCTION("compiler::fallback_plan", std::vector<c10::IValue>());
       auto copy = graph->copy();
       GRAPH_DEBUG(
           "Before LowerGradOf (beginning of runNooptPassPipeline)\n", *graph);
@@ -575,6 +578,7 @@ const ExecutionPlan& ProfilingGraphExecutorImpl::getOptimizedPlanFor(
 
   // simple executor
   if (*remaining_bailout_depth_ == 0) {
+    RECORD_FUNCTION("compiler::simple_plan", std::vector<c10::IValue>());
     auto copy = graph->copy();
     runProfilingInsensitiveOptimizations(copy);
     GRAPH_DUMP("Optimized SimpleExecutor Graph: ", copy);
@@ -584,7 +588,9 @@ const ExecutionPlan& ProfilingGraphExecutorImpl::getOptimizedPlanFor(
 
   // if a profiling graph hasn't been created yet
   if (!pr_) {
+    RECORD_FUNCTION("compiler::profiling_plan", std::vector<c10::IValue>());
     auto copy = graph->copy();
+    GRAPH_DUMP("Optimized SimpleExecutor Graph: ", copy);
     runProfilingInsensitiveOptimizations(copy);
     pr_ = ProfilingRecord::instrumentGraph(copy);
     // `InsertProfileNodesForSpecializeAutogradZero` profiles a definition vs a
@@ -604,11 +610,15 @@ const ExecutionPlan& ProfilingGraphExecutorImpl::getOptimizedPlanFor(
   }
 
   auto copy = pr_->graph()->copy();
+  RECORD_FUNCTION("compiler::optimized_plan", std::vector<c10::IValue>());
   ProfilingRecord::removeProfileCounter(copy->block());
   runProfilingOptimizations(copy);
   // replaces a fallback graph inserted by
   // specialize_autogradzero if one exists
-  replaceFallbackGraphWithFallbackFunction(copy->block());
+  {
+    RECORD_FUNCTION("compiler::replaceFallbackGraphWithFallbackFunction", std::vector<c10::IValue>());
+    replaceFallbackGraphWithFallbackFunction(copy->block());
+  }
   GRAPH_DUMP("Optimized Graph: ", copy);
   optimized_plan_ =
       ExecutionPlan(copy, function_name_, *remaining_bailout_depth_);
@@ -626,6 +636,8 @@ const ExecutionPlan& ProfilingGraphExecutorImpl::getPlanFor(
     return *optimized_plan_;
   }
 
+
+  RECORD_FUNCTION("compiler::getOptimizedPlanFor", std::vector<c10::IValue>());
   return getOptimizedPlanFor(stack, remaining_bailout_depth);
 }
 

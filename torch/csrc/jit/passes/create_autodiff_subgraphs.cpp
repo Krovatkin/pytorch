@@ -269,6 +269,7 @@ class SubgraphSlicer {
 std::vector<Node*> CreateAutodiffSubgraphs(
     const std::shared_ptr<Graph>& graph,
     size_t threshold) {
+  RECORD_FUNCTION("compiler::CreateAutodiffSubgraphs", std::vector<c10::IValue>());
   std::vector<Node*> diff_nodes;
   AliasDb db(graph);
   GRAPH_DEBUG("Before creating autodiff subgraphs", *graph);

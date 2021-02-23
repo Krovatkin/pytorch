@@ -821,6 +821,7 @@ void packReturnValuesIntoTuple(const std::shared_ptr<Graph>& graph) {
 }
 
 Gradient differentiate(std::shared_ptr<Graph>& graph) {
+  RECORD_FUNCTION("compiler::differentiate", std::vector<c10::IValue>());
   Gradient grad_desc;
   // Take ownership of the graph
   TORCH_CHECK(
@@ -832,7 +833,7 @@ Gradient differentiate(std::shared_ptr<Graph>& graph) {
   // XXX: Take care when handling outputs - they can be duplicated!
 
   GRAPH_DUMP("grad_desc.f: ", grad_desc.f);
-  WithInsertPoint guard(grad_desc.f->block());
+  WithInsertPoint guard_grad(grad_desc.f->block());
   // Fills in df_input_vjps and df_output_vjps
   auto rev_info = addReverseInline(grad_desc);
   Optimize(grad_desc, rev_info);

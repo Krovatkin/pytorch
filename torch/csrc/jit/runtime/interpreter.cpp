@@ -508,7 +508,10 @@ struct CodeImpl {
     }
     n_inputs = graph_->inputs().size();
     // std::cout << *graph_ << "\n";
-    emitCodeForBlock(graph_->block());
+    {
+      RECORD_FUNCTION("compiler::emitCodeForBlock", std::vector<c10::IValue>());
+      emitCodeForBlock(graph_->block());
+    }
     insertInstruction(RET);
     // we deferred the emission of bailout blocks so they appear at the end
     // emit them now and patch up the jumps
