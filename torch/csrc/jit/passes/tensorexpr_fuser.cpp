@@ -14,6 +14,7 @@
 #include <torch/csrc/jit/runtime/operator_options.h>
 #include <torch/csrc/jit/tensorexpr/kernel.h>
 #include <torch/csrc/utils/memory.h>
+#include "ATen/core/interned_strings.h"
 
 namespace torch {
 namespace jit {
@@ -377,10 +378,31 @@ class TensorExprFuser {
       // XXX: Use of shape_of.emplace is crucial to the output shape
       // optimization!
       if (n->kind() == aten::cat) {
-        // This is a bit more involved, because we have to account for the case
-        // when inputs have different shapes, but fortunately those tensors are
-        // always outputs, and so we can simply avoid replacing their queries,
-        // because it won't help us.
+        auto list_construct = n->input(0)->node();
+        if (list_construct->kind() != prim::ListConstruct || n->input(1)->node()->kind() != prim::Constant) {
+          continue;
+        }
+
+        bool all_inputs_have_sizes = true;
+        auto sizes = fmap(list_construct->inputs(), [&](Value* v) {
+          GRAPH_DEBUG("Getting aten::size for %", v->debugName());
+          all_inputs_have_sizes &= shape_of.count(v);
+          return shape_of.count(v) != 0 ? shape_of.at(v) : nullptr;
+        });
+
+        if (!all_inputs_have_sizes) {
+          continue;
+        }
+
+        AT_ASSERT(!sizes.empty());
+        Graph* graph = n->owningGraph();
+        Node* cat_sizes =
+            graph->insertNode(graph->create(prim::CatSizes, sizes));
+        int64_t dim = n->input(1)->node()->i(attr::value);
+        cat_sizes->i_(attr::dim, dim);
+        cat_sizes->output()->setType(ListType::ofInts());
+        aliasDb_.get()->createValue(cat_sizes->output());
+        shape_of.emplace(n->output(), cat_sizes->output());
         continue;
       }
       if (n->kind() == prim::Constant) {

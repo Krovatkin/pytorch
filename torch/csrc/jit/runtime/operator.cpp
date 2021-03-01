@@ -232,6 +232,7 @@ bool printerHasSpecialCaseFor(Symbol sym) {
       prim::FunctionalGraph, // optimization pass adds it,
       prim::ReductionSizes, // optimization pass (fuser) adds it
       prim::BroadcastSizes, // optimization pass (fuser) adds it
+      prim::CatSizes, // optimization pass (fuser) adds it
       prim::ChunkSizes, // optimization pass (fuser) adds it
       prim::Drop, // used in interpreter only
       prim::FusedConcat, // optimization pass adds it
@@ -290,6 +291,7 @@ bool aliasAnalysisHasSpecialCaseFor(Symbol symbol) {
       prim::MMTreeReduce,
       prim::MMBatchSide,
       prim::BroadcastSizes,
+      prim::CatSizes,
       prim::ChunkSizes,
       prim::Closure,
       prim::TupleUnpack,

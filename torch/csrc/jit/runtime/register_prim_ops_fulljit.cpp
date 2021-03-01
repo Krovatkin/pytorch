@@ -388,6 +388,25 @@ RegisterOperators reg(
          },
          aliasAnalysisSpecialCase()),
      Operator(
+         "prim::CatSizes(...) -> int[]",
+         [](const Node* node) -> Operation {
+           auto num_inputs = node->inputs().size();
+           auto dim = node->i(attr::dim);
+           return [num_inputs, dim](Stack* stack) {
+             //auto num_inputs = pop(stack).toInt();
+             
+             TORCH_INTERNAL_ASSERT(num_inputs > 0);
+             auto cat_size = peek(stack, 0, num_inputs).toIntVector();
+             for (auto i = 1; i < num_inputs; ++i) {
+               auto sizes = peek(stack, i, num_inputs).toIntVector();
+               cat_size[dim] += sizes[dim];
+
+             }
+           push(stack, IValue(cat_size));
+           };
+         },
+         aliasAnalysisSpecialCase()),
+     Operator(
          prim::ChunkSizes,
          [](const Node* node) -> Operation {
            int64_t raw_dim = node->i(attr::dim);

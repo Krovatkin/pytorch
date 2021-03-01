@@ -117,6 +117,22 @@ class TestTEFuser(JitTestCase):
         scripted = self.checkScript(func, (a,))
         self.assertLastGraphAllFused()
 
+    def test_cat_size(self):
+
+        @torch.jit.script
+        def foo(a, b, x, y):
+            return (torch.cat([a, b], dim = 0) + x) * y
+
+        a = torch.rand(1, 5, requires_grad=True, device='cuda')
+        b = torch.rand(2, 5, requires_grad=True, device='cuda')
+        x = torch.rand(3, 5, requires_grad=True, device='cuda')
+        y = torch.rand(1, 5, requires_grad=True, device='cuda')
+
+        foo(a, b, x, y)
+        foo(a, b, x, y)
+
+
+
     def test_sum_simple(self):
         def func(x):
             x2 = x * x

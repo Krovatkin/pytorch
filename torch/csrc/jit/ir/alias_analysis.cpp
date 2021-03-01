@@ -494,6 +494,7 @@ void AliasDb::analyzeImpl(Node* node) {
     case prim::MMTreeReduce:
     case prim::MMBatchSide:
     case prim::BroadcastSizes:
+    case prim::CatSizes:
     case prim::ChunkSizes:
     case prim::Closure:
     case prim::CreateObject:
