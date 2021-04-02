@@ -667,10 +667,9 @@ static void Optimize(Gradient& grad_desc, ReverseDetails& rev_info) {
   eliminateDeadCode(rev_info);
 }
 
-
-
-static value_list removeRecomputedExpressions(const value_list& captures, Block* b) {
-
+static value_list removeRecomputedExpressions(
+    const value_list& captures,
+    Block* b) {
   b->owningNode()->owningGraph()->appendNode(b->owningNode());
 
   GRAPH_DEBUG("@@@Reverse block before", *b->owningNode());
@@ -688,25 +687,22 @@ static value_list removeRecomputedExpressions(const value_list& captures, Block*
     return v;
   };
 
-
-
-  //TODO check that all inputs are captured
+  // TODO check that all inputs are captured
   auto inputs_captured = [&](Node* n) {
     return std::all_of(n->inputs().begin(), n->inputs().end(), [&](Value* v) {
       if (v->node()->kind() == prim::profile) {
         v = v->node()->input(0);
       }
-      return captures_set.count(v) != 0 || inlined_exprs.count(v) != 0 || v->node()->kind() == prim::Constant;
+      return captures_set.count(v) != 0 || inlined_exprs.count(v) != 0 ||
+          v->node()->kind() == prim::Constant;
     });
   };
-
 
   WithInsertPoint wip{b->nodes().begin()->next()};
 
   std::function<Node*(Node*)> recursiveClone = [&](Node* n) -> Node* {
-
     auto graph = b->owningGraph();
-    for (auto inp: n->inputs()) {
+    for (auto inp : n->inputs()) {
       if (captures_set.count(inp) == 0 && inlined_exprs.count(inp) == 0) {
         recursiveClone(inp->node());
       }
@@ -725,30 +721,26 @@ static value_list removeRecomputedExpressions(const value_list& captures, Block*
   };
 
   auto cloneAndMap = [&](Node* n) {
-
-      auto graph = b->owningGraph();
-      auto copy = graph->createClone(n, lookup);
-      GRAPH_DEBUG("@@@Creating a clone ", *copy, " of ", *n);
-      for (size_t i = 0; i < copy->outputs().size(); i++) {
-        copy->output(i)->copyMetadata(n->output(i));
-        graph->insertNode(copy);
-        inlined_exprs[n->output(i)] = copy->output(i);
-        n->output(i)->replaceAllUsesAfterNodeWith(copy, copy->output(i));
-
+    auto graph = b->owningGraph();
+    auto copy = graph->createClone(n, lookup);
+    GRAPH_DEBUG("@@@Creating a clone ", *copy, " of ", *n);
+    for (size_t i = 0; i < copy->outputs().size(); i++) {
+      copy->output(i)->copyMetadata(n->output(i));
+      graph->insertNode(copy);
+      inlined_exprs[n->output(i)] = copy->output(i);
+      n->output(i)->replaceAllUsesAfterNodeWith(copy, copy->output(i));
     }
   };
 
-  
-  
   value_list new_captures;
-  for (auto v: captures) {
+  for (auto v : captures) {
     // heuristics to decide if a value needs to be recomputed
     if (v->node()->kind() == aten::threshold && inputs_captured(v->node())) {
       GRAPH_DEBUG("@@@Found value %", v->debugName(), " of node ", *v->node());
-      //TORCH_INTERNAL_ASSERT(inputs_captured(v->node()));
+      // TORCH_INTERNAL_ASSERT(inputs_captured(v->node()));
       TORCH_INTERNAL_ASSERT(v->node()->outputs().size() == 1);
 
-      for (auto inp: v->node()->inputs()) {
+      for (auto inp : v->node()->inputs()) {
         if (inp->node()->kind() == prim::Constant) {
           cloneAndMap(inp->node());
         }
@@ -771,29 +763,29 @@ static value_list removeRecomputedExpressions(const value_list& captures, Block*
   return new_captures;
 }
 
-
 static void inlineProfileNodes_(Block* block) {
-
   auto replaceAfter = block->param_node();
-  for (auto n: block->nodes()) {
-    for (auto inp: n->inputs()) {
+  for (auto n : block->nodes()) {
+    for (auto inp : n->inputs()) {
       if (inp->node()->kind() == prim::profile) {
         inp->replaceAllUsesAfterNodeWith(replaceAfter, inp->node()->input(0));
       }
     }
 
-    for (auto ib: n->blocks()) {
+    for (auto ib : n->blocks()) {
       inlineProfileNodes_(ib);
     }
   }
 }
 
 static void inlineProfileNodes(Block* block) {
-  GRAPH_DEBUG("@@@Reverse inlineProfileNodes block before", *block->owningNode());
+  GRAPH_DEBUG(
+      "@@@Reverse inlineProfileNodes block before", *block->owningNode());
   block->owningNode()->owningGraph()->appendNode(block->owningNode());
   inlineProfileNodes_(block);
   block->owningNode()->removeFromList();
-  GRAPH_DEBUG("@@@Reverse inlineProfileNodes block after", *block->owningNode());
+  GRAPH_DEBUG(
+      "@@@Reverse inlineProfileNodes block after", *block->owningNode());
 }
 
 // Takes a grad_desc.f returned from `addReverseInline` and splits off the
@@ -808,7 +800,6 @@ static void lambdaLiftReverse(Gradient& grad_desc, ReverseDetails& rev_info) {
   auto& graph = *grad_desc.f;
   auto reverse_block = rev_info.reverse_block;
 
-
   inlineProfileNodes(reverse_block);
 
   // --------------------------------------------------------------------------
@@ -821,7 +812,8 @@ static void lambdaLiftReverse(Gradient& grad_desc, ReverseDetails& rev_info) {
   // Invariant: topo sorted
   value_list reverse_captures = getReverseCaptures(grad_desc);
 
-  reverse_captures = removeRecomputedExpressions(reverse_captures, reverse_block);
+  reverse_captures =
+      removeRecomputedExpressions(reverse_captures, reverse_block);
 
   // --------------------------------------------------------------------------
   // 2. Prepare input/outputs lists for f and df

@@ -213,7 +213,9 @@ void InplaceMKLDNNSubgraph(std::shared_ptr<Graph> graph) {
   }
 }
 
-Operation createUnaryOp(std::function<void(at::Tensor output, at::Tensor input)> aten_op, std::function<Tensor(Tensor)> fallback) {
+Operation createUnaryOp(
+    std::function<void(at::Tensor output, at::Tensor input)> aten_op,
+    std::function<Tensor(Tensor)> fallback) {
   return [aten_op, fallback](Stack* stack) {
     auto a = pop(stack).toTensor();
     if (a.numel() == 0) {
@@ -229,17 +231,17 @@ Operation createUnaryOp(std::function<void(at::Tensor output, at::Tensor input)>
 
       auto it_empty = ideep::tensor(a_it.get_desc());
       auto out = at::native::new_with_itensor_mkldnn(
-            std::move(it_empty),
-            optTypeMetaToScalarType(a.options().dtype_opt()),
-            a.options().device_opt());
+          std::move(it_empty),
+          optTypeMetaToScalarType(a.options().dtype_opt()),
+          a.options().device_opt());
 
-      auto out_raw_data = at::native::itensor_from_mkldnn(out).get_data_handle();
+      auto out_raw_data =
+          at::native::itensor_from_mkldnn(out).get_data_handle();
       auto out_aten = at::from_blob(out_raw_data, {a.numel()}, topt);
-      //at::hardswish_out(out_aten, t);
+      // at::hardswish_out(out_aten, t);
       aten_op(out_aten, t);
       push(stack, out);
-    }
-    else {
+    } else {
       auto out = fallback(a);
       push(stack, out);
     }
@@ -282,13 +284,11 @@ Operation BroadOp(const Node* node) {
 const RegisterOperators MKLDNNHardSwishOpReg({
     torch::jit::Operator(
         "aten::MKLDNNHardSwish(Tensor a) -> Tensor",
-        createUnaryOp([](at::Tensor output, at::Tensor input) {
-          at::hardswish_out(output, input);
-        },
-        [](Tensor input) {
-          return at::hardswish(input);
-        } 
-        ),
+        createUnaryOp(
+            [](at::Tensor output, at::Tensor input) {
+              at::hardswish_out(output, input);
+            },
+            [](Tensor input) { return at::hardswish(input); }),
         AliasAnalysisKind::FROM_SCHEMA),
 });
 
