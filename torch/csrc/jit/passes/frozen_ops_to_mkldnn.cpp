@@ -227,16 +227,6 @@ Operation createUnaryOp(std::function<void(at::Tensor output, at::Tensor input)>
       auto topt = a.options().layout(c10::kStrided);
       auto t = at::from_blob(raw_data, {a.numel()}, topt);
 
-      // auto out = at::native::empty_mkldnn(
-      //       a.sizes(),
-      //       optTypeMetaToScalarType(a.options().dtype_opt()),
-      //       a.options().layout_opt(),
-      //       a.options().device_opt(),
-      //       a.options().pinned_memory_opt());
-
-      // auto out_it = at::native::itensor_from_mkldnn(out);
-      // out_it.reinit_like(a_it);
-
       auto it_empty = ideep::tensor(a_it.get_desc());
       auto out = at::native::new_with_itensor_mkldnn(
             std::move(it_empty),
@@ -255,39 +245,6 @@ Operation createUnaryOp(std::function<void(at::Tensor output, at::Tensor input)>
     }
   };
 }
-
-// Operation HardSwishOp(const Node* node) {
-//   return [](Stack* stack) {
-//     auto a = pop(stack).toTensor();
-//     if (a.numel() == 0) {
-//       // clone should be cheap for a 0-size tensor
-//       push(stack, a.clone());
-//     }
-//     if (a.is_mkldnn()) {
-//       c10::impl::ExcludeDispatchKeyGuard edkg(c10::autograd_dispatch_keyset);
-//       auto a_it = at::native::itensor_from_mkldnn(a);
-//       auto raw_data = a_it.get_data_handle();
-//       auto topt = a.options().layout(c10::kStrided);
-//       auto t = at::from_blob(raw_data, {a.numel()}, topt);
-
-//       auto out = at::native::empty_mkldnn(
-//             a.sizes(),
-//             optTypeMetaToScalarType(a.options().dtype_opt()),
-//             a.options().layout_opt(),
-//             a.options().device_opt(),
-//             a.options().pinned_memory_opt());
-//       auto out_it = at::native::itensor_from_mkldnn(out);
-//       out_it.reinit_like(a_it);
-//       auto out_raw_data = at::native::itensor_from_mkldnn(out).get_data_handle();
-//       auto out_aten = at::from_blob(out_raw_data, {a.numel()}, topt);
-//       at::hardswish_out(out_aten, t);
-//       push(stack, out);
-//     }
-//     else {
-//       push(stack, at::hardswish(a));
-//     }
-//   };
-// }
 
 Operation BroadOp(const Node* node) {
   return [](Stack* stack) {
