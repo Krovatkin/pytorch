@@ -1843,10 +1843,13 @@ class TestMKLDNNReinplacing(JitTestCase):
 
     def test_successful(self):
         # simple conv-relu
-        mod_eager = nn.Sequential(self.getConv(), nn.ReLU(), nn.ReLU())
+
+        mod_eager = nn.Sequential(self.getConv(), nn.Hardswish(), nn.ReLU())
         mod = self.freezeAndConvert(mod_eager)
-        FileCheck().check("mkldnn_convolution").check_next("aten::relu_").check_next("aten::relu_").run(mod.graph)
+        print(mod.graph)
+        FileCheck().check("mkldnn_convolution").check_next("aten::MKLDNNHardSwish").check_next("aten::relu_").run(mod.graph)
         self.checkResults(mod_eager, mod)
+        
 
     def test_merge_liveness(self):
         class Mod(nn.Module):

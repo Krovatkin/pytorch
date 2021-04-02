@@ -26,6 +26,14 @@
 #include <ATen/native/ConvUtils.h>
 #include <algorithm>
 #include <memory>
+#include "Functions.h"
+#include "c10/core/Layout.h"
+
+#if AT_MKLDNN_ENABLED()
+#include <ATen/native/mkldnn/MKLDNNCommon.h>
+#include <ideep.hpp>
+#endif
+
 // clang-format on
 
 namespace torch {
@@ -205,6 +213,82 @@ void InplaceMKLDNNSubgraph(std::shared_ptr<Graph> graph) {
   }
 }
 
+Operation createUnaryOp(std::function<void(at::Tensor output, at::Tensor input)> aten_op, std::function<Tensor(Tensor)> fallback) {
+  return [aten_op, fallback](Stack* stack) {
+    auto a = pop(stack).toTensor();
+    if (a.numel() == 0) {
+      // clone should be cheap for a 0-size tensor
+      push(stack, a.clone());
+    }
+    if (a.is_mkldnn()) {
+      c10::impl::ExcludeDispatchKeyGuard edkg(c10::autograd_dispatch_keyset);
+      auto a_it = at::native::itensor_from_mkldnn(a);
+      auto raw_data = a_it.get_data_handle();
+      auto topt = a.options().layout(c10::kStrided);
+      auto t = at::from_blob(raw_data, {a.numel()}, topt);
+
+      // auto out = at::native::empty_mkldnn(
+      //       a.sizes(),
+      //       optTypeMetaToScalarType(a.options().dtype_opt()),
+      //       a.options().layout_opt(),
+      //       a.options().device_opt(),
+      //       a.options().pinned_memory_opt());
+
+      // auto out_it = at::native::itensor_from_mkldnn(out);
+      // out_it.reinit_like(a_it);
+
+      auto it_empty = ideep::tensor(a_it.get_desc());
+      auto out = at::native::new_with_itensor_mkldnn(
+            std::move(it_empty),
+            optTypeMetaToScalarType(a.options().dtype_opt()),
+            a.options().device_opt());
+
+      auto out_raw_data = at::native::itensor_from_mkldnn(out).get_data_handle();
+      auto out_aten = at::from_blob(out_raw_data, {a.numel()}, topt);
+      //at::hardswish_out(out_aten, t);
+      aten_op(out_aten, t);
+      push(stack, out);
+    }
+    else {
+      auto out = fallback(a);
+      push(stack, out);
+    }
+  };
+}
+
+// Operation HardSwishOp(const Node* node) {
+//   return [](Stack* stack) {
+//     auto a = pop(stack).toTensor();
+//     if (a.numel() == 0) {
+//       // clone should be cheap for a 0-size tensor
+//       push(stack, a.clone());
+//     }
+//     if (a.is_mkldnn()) {
+//       c10::impl::ExcludeDispatchKeyGuard edkg(c10::autograd_dispatch_keyset);
+//       auto a_it = at::native::itensor_from_mkldnn(a);
+//       auto raw_data = a_it.get_data_handle();
+//       auto topt = a.options().layout(c10::kStrided);
+//       auto t = at::from_blob(raw_data, {a.numel()}, topt);
+
+//       auto out = at::native::empty_mkldnn(
+//             a.sizes(),
+//             optTypeMetaToScalarType(a.options().dtype_opt()),
+//             a.options().layout_opt(),
+//             a.options().device_opt(),
+//             a.options().pinned_memory_opt());
+//       auto out_it = at::native::itensor_from_mkldnn(out);
+//       out_it.reinit_like(a_it);
+//       auto out_raw_data = at::native::itensor_from_mkldnn(out).get_data_handle();
+//       auto out_aten = at::from_blob(out_raw_data, {a.numel()}, topt);
+//       at::hardswish_out(out_aten, t);
+//       push(stack, out);
+//     }
+//     else {
+//       push(stack, at::hardswish(a));
+//     }
+//   };
+// }
+
 Operation BroadOp(const Node* node) {
   return [](Stack* stack) {
     auto b = pop(stack).toTensor();
@@ -237,6 +321,19 @@ Operation BroadOp(const Node* node) {
     }
   };
 }
+
+const RegisterOperators MKLDNNHardSwishOpReg({
+    torch::jit::Operator(
+        "aten::MKLDNNHardSwish(Tensor a) -> Tensor",
+        createUnaryOp([](at::Tensor output, at::Tensor input) {
+          at::hardswish_out(output, input);
+        },
+        [](Tensor input) {
+          return at::hardswish(input);
+        } 
+        ),
+        AliasAnalysisKind::FROM_SCHEMA),
+});
 
 const RegisterOperators BroadOpReg({
     torch::jit::Operator(
@@ -456,6 +553,11 @@ void ComputeSubgraphInMKLDNN(Node* subgraph_node) {
       body_node->replaceInput(1, node->outputs().at(1));
     }
 
+    if (body_node->kind() == Symbol::aten("hardswish")) {
+      body_node->replaceWithNewSymbol(Symbol::aten("MKLDNNHardSwish"));
+      body_node->destroy();
+    }
+
     if (body_node->kind() == aten::conv2d ||
         body_node->kind() == aten::conv3d) {
       // this node doesnt handle string padding yet...
@@ -631,6 +733,10 @@ class MKLDNNSubgraphSlicer {
       case aten::max_pool2d:
       case aten::max_pool3d:
         return true;
+    }
+
+    if (n->kind() == Symbol::aten("hardswish")) {
+      return true;
     }
 
     if (n->kind() == aten::add || n->kind() == aten::mul) {
