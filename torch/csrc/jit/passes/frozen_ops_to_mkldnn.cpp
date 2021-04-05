@@ -4,6 +4,7 @@
 #include <ATen/core/interned_strings.h>
 #include <c10/core/ScalarType.h>
 #include <c10/util/Exception.h>
+#include <dnnl_types.h>
 #include <torch/csrc/jit/ir/alias_analysis.h>
 #include <torch/csrc/jit/ir/constants.h>
 #include <torch/csrc/jit/ir/ir.h>
@@ -28,6 +29,7 @@
 #include <memory>
 #include "Functions.h"
 #include "c10/core/Layout.h"
+#include "c10/util/StringUtil.h"
 
 #if AT_MKLDNN_ENABLED()
 #include <ATen/native/mkldnn/MKLDNNCommon.h>
@@ -177,7 +179,7 @@ void InplaceMKLDNNSubgraph(std::shared_ptr<Graph> graph) {
 
   for (Node* node : graph->nodes()) {
     auto k = node->kind();
-    if (k == aten::relu || k == aten::sigmoid || k == aten::dropout) {
+    if (k == aten::relu || k == aten::sigmoid || k == aten::dropout || k == Symbol::aten("MKLDNNHardSwish") || k == Symbol::aten("MKLDNNHardSigmoid")) {
       if (set_liveness[alias_mapping[node->inputs().at(0)]]->isAfter(node)) {
         continue;
       }
@@ -214,9 +216,8 @@ void InplaceMKLDNNSubgraph(std::shared_ptr<Graph> graph) {
 }
 
 Operation createUnaryOp(
-    std::function<void(at::Tensor output, at::Tensor input)> aten_op,
-    std::function<Tensor(Tensor)> fallback) {
-  return [aten_op, fallback](Stack* stack) {
+    std::function<void(at::Tensor output, at::Tensor input)> aten_op, bool inplace = false) {
+  return [aten_op, inplace](Stack* stack) {
     auto a = pop(stack).toTensor();
     if (a.numel() == 0) {
       // clone should be cheap for a 0-size tensor
@@ -229,20 +230,26 @@ Operation createUnaryOp(
       auto topt = a.options().layout(c10::kStrided);
       auto t = at::from_blob(raw_data, {a.numel()}, topt);
 
-      auto it_empty = ideep::tensor(a_it.get_desc());
-      auto out = at::native::new_with_itensor_mkldnn(
-          std::move(it_empty),
-          optTypeMetaToScalarType(a.options().dtype_opt()),
-          a.options().device_opt());
+      auto out_raw_data = raw_data;
+      auto out = a;
+      if (!inplace) {
+        auto it_empty = ideep::tensor(a_it.get_desc());
+        out = at::native::new_with_itensor_mkldnn(
+            std::move(it_empty),
+            optTypeMetaToScalarType(a.options().dtype_opt()),
+            a.options().device_opt());
 
-      auto out_raw_data =
-          at::native::itensor_from_mkldnn(out).get_data_handle();
+        out_raw_data =
+            at::native::itensor_from_mkldnn(out).get_data_handle();
+      }
+
       auto out_aten = at::from_blob(out_raw_data, {a.numel()}, topt);
       // at::hardswish_out(out_aten, t);
       aten_op(out_aten, t);
       push(stack, out);
     } else {
-      auto out = fallback(a);
+      auto out = at::empty_like(a);
+      aten_op(out, a);
       push(stack, out);
     }
   };
@@ -250,6 +257,7 @@ Operation createUnaryOp(
 
 Operation BroadOp(const Node* node) {
   return [](Stack* stack) {
+    std::cout << "Running BroadOp" << std::endl;
     auto b = pop(stack).toTensor();
     auto a = pop(stack).toTensor();
     auto b_size = b.sizes();
@@ -262,19 +270,39 @@ Operation BroadOp(const Node* node) {
       for (size_t i = 1, end = out_size.size(); i < end; ++i) {
         out_numel = out_numel * out_size[i];
       }
+
+      {
+        c10::impl::ExcludeDispatchKeyGuard edkg(c10::autograd_dispatch_keyset);
+        auto a_it = at::native::itensor_from_mkldnn(a);
+        auto b_desc = a_it.get_descriptor();
+        if (b_desc.is_blocking_desc()) {
+          std::vector<int64_t> block_strides (b_desc.blocking_strides(), b_desc.blocking_strides() + DNNL_MAX_NDIMS);
+          std::cout << "num inner blocks " << b_desc.blocking_desc().inner_nblks << std::endl;
+          std::cout << "blocking strides: " << c10::Join("," , block_strides) << std::endl;
+        } else {
+          std::cout << "non blocked\n";
+        }
+      }
       // mkldnn tensors only support reshape, not expand or view operators
       if (a_size.equals(out_size)) {
         push(stack, a);
       } else if (out_numel == a.numel()) {
         push(stack, a.reshape(out_size));
       } else {
-        push(stack, a.to_dense().expand(out_size).to_mkldnn());
+        std::cout << "Reshaping a (" << c10::Join(",", a_size.vec()) << ") to (" <<  c10::Join(",", out_size)  << ")" << std::endl;
+        auto a_expanded = a.to_dense().expand(out_size);
+        std::cout << "Before to_mkldnn\n";
+        auto a_mkldnn = a_expanded.to_mkldnn();
+        std::cout << "After to_mkldnn\n";
+        push(stack, a_mkldnn);
       }
+
       if (b_size.equals(out_size)) {
         push(stack, b);
       } else if (out_numel == b.numel()) {
         push(stack, b.reshape(out_size).to_mkldnn());
       } else {
+        std::cout << "Reshaping b (" << c10::Join(",", b_size.vec()) << ") to (" <<  c10::Join(",", out_size)  << ")" << std::endl;
         push(stack, b.to_dense().expand(out_size).to_mkldnn());
       }
     }
@@ -283,12 +311,36 @@ Operation BroadOp(const Node* node) {
 
 const RegisterOperators MKLDNNHardSwishOpReg({
     torch::jit::Operator(
+        "aten::MKLDNNHardSwish_(Tensor a) -> Tensor",
+        createUnaryOp(
+            [](at::Tensor output, at::Tensor input) {
+              at::hardswish_out(output, input);
+            },
+            true),
+        AliasAnalysisKind::FROM_SCHEMA),
+    torch::jit::Operator(
+        "aten::MKLDNNHardSigmoid_(Tensor a) -> Tensor",
+        createUnaryOp(
+            [](at::Tensor output, at::Tensor input) {
+              at::hardsigmoid_out(output, input);
+            },
+            true),
+        AliasAnalysisKind::FROM_SCHEMA),
+    torch::jit::Operator(
         "aten::MKLDNNHardSwish(Tensor a) -> Tensor",
         createUnaryOp(
             [](at::Tensor output, at::Tensor input) {
               at::hardswish_out(output, input);
             },
-            [](Tensor input) { return at::hardswish(input); }),
+            false),
+        AliasAnalysisKind::FROM_SCHEMA),
+    torch::jit::Operator(
+        "aten::MKLDNNHardSigmoid(Tensor a) -> Tensor",
+        createUnaryOp(
+            [](at::Tensor output, at::Tensor input) {
+              at::hardsigmoid_out(output, input);
+            },
+            false),
         AliasAnalysisKind::FROM_SCHEMA),
 });
 
@@ -515,6 +567,12 @@ void ComputeSubgraphInMKLDNN(Node* subgraph_node) {
       body_node->destroy();
     }
 
+    // TODO: maybe add a mapping for names
+    if (body_node->kind() == aten::hardsigmoid) {
+      body_node->replaceWithNewSymbol(Symbol::aten("MKLDNNHardSigmoid"));
+      body_node->destroy();
+    }
+
     if (body_node->kind() == aten::conv2d ||
         body_node->kind() == aten::conv3d) {
       // this node doesnt handle string padding yet...
@@ -684,6 +742,7 @@ class MKLDNNSubgraphSlicer {
     switch (n->kind()) {
       case aten::relu:
       case aten::sigmoid:
+      case aten::hardsigmoid:
       // TODO: max_pool on mkldnn can be slower than in eager. ideally, we'd
       // only fuse it if we knew including max_pool lead to fewer layout
       // conversions. from initial testing including it speeds up models
@@ -820,8 +879,10 @@ void ConvertFrozenOpsToMKLDNN(std::shared_ptr<Graph>& graph) {
           aten::add_,
           aten::mul_,
           aten::relu_,
+          Symbol::aten("hardswish_"),
           aten::dropout_,
           aten::sigmoid_,
+          Symbol::aten("hardsigmoid_"),
       };
       return mkldnn_ops.count(node_to_functionalize->kind()) != 0;
     });
