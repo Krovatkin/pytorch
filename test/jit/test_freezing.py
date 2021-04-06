@@ -1841,7 +1841,7 @@ class TestFrozenOptimizations(JitTestCase):
             input_sizes = ([0], [1], [3], [1, 3, 8, 8])
             for (mkldnn_opname, aten_op) in op_map.items():
                 for size in input_sizes:
-                    for inplace in (False, True):
+                    for inplace in (True, False):
                         inplace_str = "_" if inplace else ""
                         inplace_tgt = "%34" if inplace else "%35"
                         graph_str = f"""graph(%input.1 : Tensor):
@@ -1853,7 +1853,8 @@ class TestFrozenOptimizations(JitTestCase):
                         g = parse_ir(graph_str)
                         m = self.createFunctionFromGraph(g)
                         x = torch.rand(size)
-                        self.assertTrue(torch.allclose(aten_op(x, inplace=inplace), m(x).to_dense()))
+                        x_copy = x.detach().clone()
+                        self.assertTrue(torch.allclose(aten_op(x, inplace=inplace), m(x_copy).to_dense()))
 
 
 @unittest.skipIf(not torch._C.has_mkldnn, "MKL-DNN build is disabled")
