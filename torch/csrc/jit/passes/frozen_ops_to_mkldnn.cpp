@@ -27,9 +27,9 @@
 #include <ATen/native/ConvUtils.h>
 #include <algorithm>
 #include <memory>
-#include "Functions.h"
-#include "c10/core/Layout.h"
-#include "c10/util/StringUtil.h"
+#include <Functions.h>
+#include <c10/core/Layout.h>
+#include <c10/util/StringUtil.h>
 
 #if AT_MKLDNN_ENABLED()
 #include <ATen/native/mkldnn/MKLDNNCommon.h>
@@ -219,7 +219,8 @@ void InplaceMKLDNNSubgraph(std::shared_ptr<Graph> graph) {
 // aten_op is a sequence of aten ops that implement a required operation
 // given input output tensors
 Operation createUnaryOp(
-    std::function<void(at::Tensor output, at::Tensor input)> aten_op, bool inplace = false) {
+    std::function<void(at::Tensor output, at::Tensor input)> aten_op,
+    bool inplace = false) {
   return [aten_op, inplace](Stack* stack) {
     auto a = pop(stack).toTensor();
     c10::impl::ExcludeDispatchKeyGuard edkg(c10::autograd_dispatch_keyset);
@@ -246,7 +247,6 @@ Operation createUnaryOp(
     auto out_aten = at::from_blob(out_raw_data, {a.numel()}, topt);
     aten_op(out_aten, t);
     push(stack, out);
-
   };
 }
 
