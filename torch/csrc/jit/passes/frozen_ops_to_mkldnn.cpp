@@ -717,14 +717,19 @@ class MKLDNNSubgraphSlicer {
     switch (n->kind()) {
       case aten::relu:
       case aten::sigmoid:
-      case aten::hardsigmoid:
-      case aten::hardswish:
+      // case aten::hardsigmoid:
+      // case aten::hardswish:
       // TODO: max_pool on mkldnn can be slower than in eager. ideally, we'd
       // only fuse it if we knew including max_pool lead to fewer layout
       // conversions. from initial testing including it speeds up models
       case aten::max_pool2d:
       case aten::max_pool3d:
         return true;
+    }
+
+    static const auto ENABLE_HARD = std::getenv("ENABLE_HARD");
+    if (ENABLE_HARD && (n->kind() == aten::hardsigmoid || n->kind() == aten::hardswish)) {
+      return true;
     }
 
     if (n->kind() == aten::add || n->kind() == aten::mul) {
