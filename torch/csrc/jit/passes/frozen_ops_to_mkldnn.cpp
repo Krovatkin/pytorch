@@ -286,7 +286,7 @@ Operation BroadOp(const Node* node) {
 
 const RegisterOperators MKLDNNHardSwishOpReg({
     torch::jit::Operator(
-        "prim::MKLDNNHardSwish_(Tensor a) -> Tensor",
+        "prim::MKLDNNHardSwish_(Tensor(a!)) -> Tensor(a!)",
         createUnaryOp(
             [](at::Tensor output, at::Tensor input) {
               at::hardswish_out(output, input);
@@ -294,7 +294,7 @@ const RegisterOperators MKLDNNHardSwishOpReg({
             true),
         AliasAnalysisKind::FROM_SCHEMA),
     torch::jit::Operator(
-        "prim::MKLDNNHardSigmoid_(Tensor a) -> Tensor",
+        "prim::MKLDNNHardSigmoid_(Tensor(a!)) -> Tensor(a!)",
         createUnaryOp(
             [](at::Tensor output, at::Tensor input) {
               at::hardsigmoid_out(output, input);
