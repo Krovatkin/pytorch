@@ -179,7 +179,8 @@ void InplaceMKLDNNSubgraph(std::shared_ptr<Graph> graph) {
 
   for (Node* node : graph->nodes()) {
     auto k = node->kind();
-    if (k == aten::relu || k == aten::sigmoid || k == aten::dropout || k == Symbol::aten("MKLDNNHardSwish") || k == Symbol::aten("MKLDNNHardSigmoid")) {
+    if (k == aten::relu || k == aten::sigmoid || k == aten::dropout ||
+        k == prim::MKLDNNHardSwish || k == prim::MKLDNNHardSigmoid) {
       if (set_liveness[alias_mapping[node->inputs().at(0)]]->isAfter(node)) {
         continue;
       }
@@ -215,49 +216,42 @@ void InplaceMKLDNNSubgraph(std::shared_ptr<Graph> graph) {
   }
 }
 
+// aten_op is a sequence of aten ops that implement a required operation
+// given input output tensors
 Operation createUnaryOp(
     std::function<void(at::Tensor output, at::Tensor input)> aten_op, bool inplace = false) {
   return [aten_op, inplace](Stack* stack) {
     auto a = pop(stack).toTensor();
-    if (a.numel() == 0) {
-      // clone should be cheap for a 0-size tensor
-      push(stack, a.clone());
+    c10::impl::ExcludeDispatchKeyGuard edkg(c10::autograd_dispatch_keyset);
+    // we cast `a` to an `ideep::tensor`, so we can get at its descriptor
+    // which we then use to set up `out` tensor w/ the same props as a
+    auto a_it = at::native::itensor_from_mkldnn(a);
+    auto raw_data = a_it.get_data_handle();
+    auto topt = a.options().layout(c10::kStrided);
+    // we also wrap `a` storage into an aten tensor
+    auto t = at::from_blob(raw_data, {a.numel()}, topt);
+
+    auto out_raw_data = raw_data;
+    auto out = a;
+    if (!inplace) {
+      auto it_empty = ideep::tensor(a_it.get_desc());
+      out = at::native::new_with_itensor_mkldnn(
+          std::move(it_empty),
+          optTypeMetaToScalarType(a.options().dtype_opt()),
+          a.options().device_opt());
+
+      out_raw_data = at::native::itensor_from_mkldnn(out).get_data_handle();
     }
-    if (a.is_mkldnn()) {
-      c10::impl::ExcludeDispatchKeyGuard edkg(c10::autograd_dispatch_keyset);
-      auto a_it = at::native::itensor_from_mkldnn(a);
-      auto raw_data = a_it.get_data_handle();
-      auto topt = a.options().layout(c10::kStrided);
-      auto t = at::from_blob(raw_data, {a.numel()}, topt);
 
-      auto out_raw_data = raw_data;
-      auto out = a;
-      if (!inplace) {
-        auto it_empty = ideep::tensor(a_it.get_desc());
-        out = at::native::new_with_itensor_mkldnn(
-            std::move(it_empty),
-            optTypeMetaToScalarType(a.options().dtype_opt()),
-            a.options().device_opt());
+    auto out_aten = at::from_blob(out_raw_data, {a.numel()}, topt);
+    aten_op(out_aten, t);
+    push(stack, out);
 
-        out_raw_data =
-            at::native::itensor_from_mkldnn(out).get_data_handle();
-      }
-
-      auto out_aten = at::from_blob(out_raw_data, {a.numel()}, topt);
-      // at::hardswish_out(out_aten, t);
-      aten_op(out_aten, t);
-      push(stack, out);
-    } else {
-      auto out = at::empty_like(a);
-      aten_op(out, a);
-      push(stack, out);
-    }
   };
 }
 
 Operation BroadOp(const Node* node) {
   return [](Stack* stack) {
-    std::cout << "Running BroadOp" << std::endl;
     auto b = pop(stack).toTensor();
     auto a = pop(stack).toTensor();
     auto b_size = b.sizes();
@@ -270,31 +264,13 @@ Operation BroadOp(const Node* node) {
       for (size_t i = 1, end = out_size.size(); i < end; ++i) {
         out_numel = out_numel * out_size[i];
       }
-
-      {
-        c10::impl::ExcludeDispatchKeyGuard edkg(c10::autograd_dispatch_keyset);
-        auto a_it = at::native::itensor_from_mkldnn(a);
-        auto b_desc = a_it.get_descriptor();
-        if (b_desc.is_blocking_desc()) {
-          std::vector<int64_t> block_strides (b_desc.blocking_strides(), b_desc.blocking_strides() + DNNL_MAX_NDIMS);
-          std::cout << "num inner blocks " << b_desc.blocking_desc().inner_nblks << std::endl;
-          std::cout << "blocking strides: " << c10::Join("," , block_strides) << std::endl;
-        } else {
-          std::cout << "non blocked\n";
-        }
-      }
       // mkldnn tensors only support reshape, not expand or view operators
       if (a_size.equals(out_size)) {
         push(stack, a);
       } else if (out_numel == a.numel()) {
         push(stack, a.reshape(out_size));
       } else {
-        std::cout << "Reshaping a (" << c10::Join(",", a_size.vec()) << ") to (" <<  c10::Join(",", out_size)  << ")" << std::endl;
-        auto a_expanded = a.to_dense().expand(out_size);
-        std::cout << "Before to_mkldnn\n";
-        auto a_mkldnn = a_expanded.to_mkldnn();
-        std::cout << "After to_mkldnn\n";
-        push(stack, a_mkldnn);
+        push(stack, a.to_dense().expand(out_size).to_mkldnn());
       }
 
       if (b_size.equals(out_size)) {
@@ -302,7 +278,6 @@ Operation BroadOp(const Node* node) {
       } else if (out_numel == b.numel()) {
         push(stack, b.reshape(out_size).to_mkldnn());
       } else {
-        std::cout << "Reshaping b (" << c10::Join(",", b_size.vec()) << ") to (" <<  c10::Join(",", out_size)  << ")" << std::endl;
         push(stack, b.to_dense().expand(out_size).to_mkldnn());
       }
     }
@@ -311,7 +286,7 @@ Operation BroadOp(const Node* node) {
 
 const RegisterOperators MKLDNNHardSwishOpReg({
     torch::jit::Operator(
-        "aten::MKLDNNHardSwish_(Tensor a) -> Tensor",
+        "prim::MKLDNNHardSwish_(Tensor a) -> Tensor",
         createUnaryOp(
             [](at::Tensor output, at::Tensor input) {
               at::hardswish_out(output, input);
@@ -319,7 +294,7 @@ const RegisterOperators MKLDNNHardSwishOpReg({
             true),
         AliasAnalysisKind::FROM_SCHEMA),
     torch::jit::Operator(
-        "aten::MKLDNNHardSigmoid_(Tensor a) -> Tensor",
+        "prim::MKLDNNHardSigmoid_(Tensor a) -> Tensor",
         createUnaryOp(
             [](at::Tensor output, at::Tensor input) {
               at::hardsigmoid_out(output, input);
@@ -327,7 +302,7 @@ const RegisterOperators MKLDNNHardSwishOpReg({
             true),
         AliasAnalysisKind::FROM_SCHEMA),
     torch::jit::Operator(
-        "aten::MKLDNNHardSwish(Tensor a) -> Tensor",
+        "prim::MKLDNNHardSwish(Tensor a) -> Tensor",
         createUnaryOp(
             [](at::Tensor output, at::Tensor input) {
               at::hardswish_out(output, input);
@@ -335,7 +310,7 @@ const RegisterOperators MKLDNNHardSwishOpReg({
             false),
         AliasAnalysisKind::FROM_SCHEMA),
     torch::jit::Operator(
-        "aten::MKLDNNHardSigmoid(Tensor a) -> Tensor",
+        "prim::MKLDNNHardSigmoid(Tensor a) -> Tensor",
         createUnaryOp(
             [](at::Tensor output, at::Tensor input) {
               at::hardsigmoid_out(output, input);
@@ -562,14 +537,14 @@ void ComputeSubgraphInMKLDNN(Node* subgraph_node) {
       body_node->replaceInput(1, node->outputs().at(1));
     }
 
-    if (body_node->kind() == Symbol::aten("hardswish")) {
-      body_node->replaceWithNewSymbol(Symbol::aten("MKLDNNHardSwish"));
+    if (body_node->kind() == aten::hardswish) {
+      body_node->replaceWithNewSymbol(prim::MKLDNNHardSwish);
       body_node->destroy();
     }
 
     // TODO: maybe add a mapping for names
     if (body_node->kind() == aten::hardsigmoid) {
-      body_node->replaceWithNewSymbol(Symbol::aten("MKLDNNHardSigmoid"));
+      body_node->replaceWithNewSymbol(prim::MKLDNNHardSigmoid);
       body_node->destroy();
     }
 
@@ -743,16 +718,13 @@ class MKLDNNSubgraphSlicer {
       case aten::relu:
       case aten::sigmoid:
       case aten::hardsigmoid:
+      case aten::hardswish:
       // TODO: max_pool on mkldnn can be slower than in eager. ideally, we'd
       // only fuse it if we knew including max_pool lead to fewer layout
       // conversions. from initial testing including it speeds up models
       case aten::max_pool2d:
       case aten::max_pool3d:
         return true;
-    }
-
-    if (n->kind() == Symbol::aten("hardswish")) {
-      return true;
     }
 
     if (n->kind() == aten::add || n->kind() == aten::mul) {
@@ -879,10 +851,10 @@ void ConvertFrozenOpsToMKLDNN(std::shared_ptr<Graph>& graph) {
           aten::add_,
           aten::mul_,
           aten::relu_,
-          Symbol::aten("hardswish_"),
+          aten::hardswish_,
           aten::dropout_,
           aten::sigmoid_,
-          Symbol::aten("hardsigmoid_"),
+          aten::hardsigmoid_,
       };
       return mkldnn_ops.count(node_to_functionalize->kind()) != 0;
     });
