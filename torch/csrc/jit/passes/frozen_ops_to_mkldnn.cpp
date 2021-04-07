@@ -256,6 +256,66 @@ Operation BroadOp(const Node* node) {
     auto a = pop(stack).toTensor();
     auto b_size = b.sizes();
     auto a_size = a.sizes();
+
+    std::map<size_t, ideep::format_tag> blocked_layouts = {
+      {4, ideep::format_tag::nChw4c},
+      {8, ideep::format_tag::nChw8c},
+      {16, ideep::format_tag::nChw16c},
+    };
+
+    static const auto PRINT = std::getenv("PRINT");
+
+    auto expand_mkldnn = [&blocked_layouts](auto m, auto out_size) -> c10::optional<at::Tensor> {
+      c10::impl::ExcludeDispatchKeyGuard edkg(c10::autograd_dispatch_keyset);
+      // we cast `a` to an `ideep::tensor`, so we can get at its descriptor
+      // which we then use to set up `out` tensor w/ the same props as a
+
+      static auto const ENABLE_BROAD = std::getenv("ENABLE_BROAD");
+      if (!ENABLE_BROAD) {
+        return {};
+      }
+      auto m_it = at::native::itensor_from_mkldnn(m);
+      if (PRINT && !m_it.get_descriptor().is_plain()) {
+        std::cerr << m_it.get_data_handle() << " tensor is in a blocked format\n";
+      }
+      
+      for (const auto& et : blocked_layouts) {
+        auto block_size = et.first;
+        // TODO: we could support tranposed outer dims in future
+        if (m_it.get_desc().is_Xc_blocked(block_size)) {          
+          const static size_t C = 1;
+          auto blocked_sizes = m.sizes().vec();
+          
+          if (PRINT) {
+            std::cerr << m_it.get_data_handle() << "blocked by " << block_size << " for [" << c10::Join(",",blocked_sizes) << "]" << std::endl;
+          }
+          TORCH_INTERNAL_ASSERT(blocked_sizes[C] % block_size == 0);
+          blocked_sizes[C] /= block_size;
+          blocked_sizes.push_back(block_size);
+          auto out_blocked_sizes = out_size;
+          out_blocked_sizes[C] /= block_size;
+          out_blocked_sizes.push_back(block_size);
+          
+          auto raw_data = m_it.get_data_handle();
+          auto opt = m.options().layout(c10::kStrided);
+          auto inp = at::from_blob(raw_data, blocked_sizes, opt);
+
+          TORCH_INTERNAL_ASSERT(m.scalar_type() == c10::kFloat);
+          auto it_out = ideep::tensor(out_size, ideep::data_type::f32, et.second);
+          auto out_raw_data = it_out.get_data_handle();
+          auto mkldnn_out = at::native::new_with_itensor_mkldnn(
+              std::move(it_out),
+              optTypeMetaToScalarType(opt.dtype_opt()),
+              opt.device_opt());
+          auto out = at::from_blob(out_raw_data, out_blocked_sizes, opt);
+          // TODO: bench with add_(alpha = 0)
+          out.copy_(inp.expand(out_blocked_sizes));
+          return {mkldnn_out};
+        }
+      }
+      return {};
+    };
+
     if (a_size.equals(b_size)) {
       push(stack, a, b);
     } else {
@@ -270,15 +330,26 @@ Operation BroadOp(const Node* node) {
       } else if (out_numel == a.numel()) {
         push(stack, a.reshape(out_size));
       } else {
-        push(stack, a.to_dense().expand(out_size).to_mkldnn());
+        auto ba = expand_mkldnn(a, out_size);
+        if (ba.has_value()) {
+          push(stack, *ba);
+        }
+        else {
+          push(stack, a.to_dense().expand(out_size).to_mkldnn());
+        }
       }
-
       if (b_size.equals(out_size)) {
         push(stack, b);
       } else if (out_numel == b.numel()) {
         push(stack, b.reshape(out_size).to_mkldnn());
       } else {
-        push(stack, b.to_dense().expand(out_size).to_mkldnn());
+        auto bb = expand_mkldnn(b, out_size);
+        if (bb.has_value()) {
+          push(stack, *bb);
+        }
+        else {
+          push(stack, b.to_dense().expand(out_size).to_mkldnn());
+        }
       }
     }
   };
