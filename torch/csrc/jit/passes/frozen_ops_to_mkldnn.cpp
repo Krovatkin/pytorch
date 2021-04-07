@@ -27,6 +27,7 @@
 #include <ATen/native/ConvUtils.h>
 #include <algorithm>
 #include <memory>
+#include <numeric>
 #include <Functions.h>
 #include <c10/core/Layout.h>
 #include <c10/util/StringUtil.h>
@@ -282,26 +283,28 @@ Operation BroadOp(const Node* node) {
       for (const auto& et : blocked_layouts) {
         auto block_size = et.first;
         // TODO: we could support tranposed outer dims in future
-        if (m_it.get_desc().is_Xc_blocked(block_size)) {          
+        auto blocked_sizes = m.sizes().vec();
+        int64_t non_c_prod = blocked_sizes.size() == 4 ? blocked_sizes[0] * blocked_sizes[2] * blocked_sizes[3]: -1;
+        if (m_it.get_desc().is_Xc_blocked(block_size) && non_c_prod == 1) {          
           const static size_t C = 1;
-          auto blocked_sizes = m.sizes().vec();
+          
           
           if (PRINT) {
             std::cerr << m_it.get_data_handle() << "blocked by " << block_size << " for [" << c10::Join(",",blocked_sizes) << "]" << std::endl;
           }
           TORCH_INTERNAL_ASSERT(blocked_sizes[C] % block_size == 0);
-          blocked_sizes[C] /= block_size;
-          blocked_sizes.push_back(block_size);
+          //blocked_sizes[C] /= block_size;
+          //blocked_sizes.push_back(block_size);
           auto out_blocked_sizes = out_size;
-          out_blocked_sizes[C] /= block_size;
-          out_blocked_sizes.push_back(block_size);
+          //out_blocked_sizes[C] /= block_size;
+          //out_blocked_sizes.push_back(block_size);
           
           auto raw_data = m_it.get_data_handle();
           auto opt = m.options().layout(c10::kStrided);
           auto inp = at::from_blob(raw_data, blocked_sizes, opt);
 
           TORCH_INTERNAL_ASSERT(m.scalar_type() == c10::kFloat);
-          auto it_out = ideep::tensor(out_size, ideep::data_type::f32, et.second);
+          auto it_out = ideep::tensor(out_size, ideep::data_type::f32, ideep::format_tag::nchw);
           auto out_raw_data = it_out.get_data_handle();
           auto mkldnn_out = at::native::new_with_itensor_mkldnn(
               std::move(it_out),
