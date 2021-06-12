@@ -45,6 +45,7 @@
 #include <torch/csrc/jit/runtime/custom_operator.h>
 #include <torch/csrc/jit/runtime/graph_executor.h>
 #include <torch/csrc/jit/runtime/interpreter.h>
+#include <torch/csrc/jit/runtime/jit_trace.h>
 #include <torch/csrc/jit/runtime/profiling_record.h>
 #include <torch/csrc/jit/runtime/symbolic_script.h>
 #include <torch/csrc/jit/serialization/import.h>
@@ -57,6 +58,8 @@
 #include <c10/util/Exception.h>
 #include <c10/util/ThreadLocalDebugInfo.h>
 
+#include <torch/csrc/jit/passes/freeze_module.h>
+#include <torch/csrc/jit/passes/frozen_graph_optimizations.h>
 #include <algorithm>
 #include <cstddef>
 #include <functional>
@@ -66,9 +69,11 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include "Functions.h"
 
 using namespace torch::autograd::profiler;
 
@@ -1826,6 +1831,46 @@ TEST(LoopPeelerTest, SimpleNestedLoops2) {
     InterpreterState interpreter{code};
     interpreter.run(stack);
     ASSERT_EQ(stack.back().toInt(), 3);
+  }
+}
+
+TEST(JitTracing, Basic2) {
+  // run `python test_jit_fuser_te.py TestTEFuser.test_save_mobilenet`
+  // to generate `test/mobilenet_v3_large.pt`
+  Module model = torch::jit::load("test/mobilenet_v3_large.pt");
+  model.eval();
+  model = freeze_module(model);
+  auto graph = model.get_method("forward").graph();
+  GRAPH_DUMP("Before OptimizeFrozenGraph:", graph);
+  OptimizeFrozenGraph(graph, true);
+  auto x = at::randn({1, 3, 224, 224}, at::kCPU);
+  Stack stack;
+  push(stack, model._ivalue());
+  push(stack, x);
+  auto traced = TraceGraph(graph, stack);
+  Tensor prof_out;
+  pop(stack, prof_out);
+
+  {
+    push(stack, model._ivalue());
+    push(stack, x);
+    Code cd(traced, "traced");
+    InterpreterState is{cd};
+    is.run(stack);
+    Tensor traced_out;
+    pop(stack, traced_out);
+    torch::allclose(prof_out, traced_out);
+  }
+
+  {
+    push(stack, model._ivalue());
+    push(stack, x);
+    Code cd(graph, "graph");
+    InterpreterState is{cd};
+    is.run(stack);
+    Tensor traced_out;
+    pop(stack, traced_out);
+    torch::allclose(prof_out, traced_out);
   }
 }
 

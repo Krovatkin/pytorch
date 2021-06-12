@@ -205,6 +205,7 @@ struct ProfilingRecord {
   }
 
   TORCH_API ProfileIValueOp* createProfileIValueNode(Value* in_val);
+  TORCH_API ProfileIValueOp* createProfileIValueNode(ArrayRef<Value*> inputs);
 
  private:
   ProfileOp* createProfileNode(
