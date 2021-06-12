@@ -1829,6 +1829,81 @@ TEST(LoopPeelerTest, SimpleNestedLoops2) {
   }
 }
 
+static std::shared_ptr<Graph> annotateWithProfilingInfo(const std::shared_ptr<Graph>& graph, Stack& stack, bool allow_overwrites = false) {
+
+
+
+void removeProfileNodesAndSpecializeTypes(Block* b) {
+  for (auto it = b->nodes().begin(); it != b->nodes().end(); it++) {
+
+  }
+}
+
+
+
+  std::function<void(Block*)> annotateAndRemoveProfilingNodes = [annotateAndRemoveProfilingNodes, allow_overwrites](Block* block) -> void {
+
+    for (auto it = block->nodes().begin(); it != block->nodes().end();) {
+      auto n = *it;
+      it++;
+
+      if (it->kind() == prim::profile) {
+        GRAPH_DEBUG("Removing prim::profile: %", it->output()->debugName());
+        it->output()->replaceAllUsesWith(it->input());
+        auto profiled_type = it->ty(attr::profiled_type)->expect<TensorType>();
+        if (profiled_type == TensorType::get()) {
+          continue;
+        }
+        it->input()->setType(it->ty(attr::profiled_type));
+        it.destroyCurrent();
+
+      } else {
+        for (Block* ib : it->blocks()) {
+          annotateAndRemoveProfilingNodes(ib);
+        }
+      }
+
+
+  }
+
+
+  auto pr = ProfilingRecord::instrumentGraph(graph);
+  Code cd(pr->profiled_graph_, "");
+  InterpreterState is{cd};
+  is.run(stack);
+  auto copy = pr->profiled_graph_->copy();
+  ProfilingRecord::removeProfileCounter(copy->block());
+  annotateAndRemoveProfilingNodes(copy->block());
+}
+
+TEST(DtypeAnalysis, Basic) {
+
+  static const auto basic_example = R"JIT(
+  def basic(x, y):
+    a = x + y
+    b = x * y
+    c = x + 1
+    d = a - c
+    e = b - c
+    return d + e
+  )JIT";
+
+  auto cu = compile(basic_example);
+  auto& fun = cu->get_function("basic");
+  auto pr = ProfilingRecord::instrumentGraph(fun.graph());
+  auto x = at::randn({2, 3}, at::kCPU);
+  auto y = at::randn({2, 3}, at::kCPU);
+  auto stack = createStack({x, y});
+  // introduce some profiling information
+  Code cd(pr->profiled_graph_, "");
+  InterpreterState is{cd};
+  is.run(stack);
+  auto copy = pr->profiled_graph_->copy();
+  ProfilingRecord::removeProfileCounter(copy->block());
+
+
+}
+
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 TEST(InsertAndEliminateRedundantGuardsTest, Basic) {
   static const auto basic_example = R"JIT(
