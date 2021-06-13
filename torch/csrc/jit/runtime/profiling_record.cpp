@@ -8,6 +8,7 @@
 #include <torch/csrc/jit/runtime/autodiff.h>
 #include <torch/csrc/jit/runtime/graph_executor.h>
 #include <torch/csrc/jit/runtime/interpreter.h>
+#include "jit/ir/ir.h"
 
 namespace torch {
 namespace jit {
@@ -98,6 +99,16 @@ ProfileIValueOp* ProfilingRecord::createProfileIValueNode(Value* in_val) {
   pn->addInput(in_val);
   auto pno = pn->addOutput();
   pno->setType(in_val->type());
+  return pn;
+}
+
+ProfileIValueOp* ProfilingRecord::createProfileIValueNode(ArrayRef<Value*> inputs) {
+  auto pn = new ProfileIValueOp(this->profiled_graph_.get(), nullptr);
+  for (auto inp: inputs) {
+    pn->addInput(inp);
+    auto pno = pn->addOutput();
+    pno->setType(inp->type());
+  }
   return pn;
 }
 

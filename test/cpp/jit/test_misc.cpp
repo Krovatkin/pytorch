@@ -66,9 +66,11 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include "torch/csrc/jit/ir/ir_views.h"
 
 using namespace torch::autograd::profiler;
 
@@ -1829,80 +1831,248 @@ TEST(LoopPeelerTest, SimpleNestedLoops2) {
   }
 }
 
-static std::shared_ptr<Graph> annotateWithProfilingInfo(const std::shared_ptr<Graph>& graph, Stack& stack, bool allow_overwrites = false) {
+struct TracingData {
 
+  std::unordered_map<Value*, Value*> old_to_new_;
+  std::shared_ptr<Graph> traced_graph_ = nullptr;
 
-
-void removeProfileNodesAndSpecializeTypes(Block* b) {
-  for (auto it = b->nodes().begin(); it != b->nodes().end(); it++) {
-
+  TracingData () {
+    traced_graph_ = std::make_shared<Graph>();
   }
+
+};
+
+
+static Node* traceNode(Node* node, TracingData& td) {
+
+    GRAPH_DEBUG("Tracing node ", getHeader(node));
+    auto* block = td.traced_graph_->block();
+    auto env = [&td](Value* v) {      
+      // TODO: support constants!
+      return td.old_to_new_.at(v);
+    };
+
+    auto new_node = block->appendNode(td.traced_graph_->createClone(node, env));
+    for (size_t i = 0; i < node->outputs().size(); ++i) {
+      auto oo = node->outputs()[i];
+      auto no = new_node->outputs()[i];
+      no->copyMetadata(oo);
+      td.old_to_new_[oo] = no;
+      GRAPH_DEBUG("Mapping ", oo->debugName(), " to ", no->debugName()); // old to new outputs
+    }
+    return new_node;
 }
 
+static void eraseAllOutputs(Node* opt_pn) {
+    for (int i = opt_pn->outputs().size() - 1; i >= 0; i--) {
+      opt_pn->eraseOutput(i);
+    }
+}
 
+void insertTracingNodes(Block*, ProfilingRecord*, TracingData&);
 
-  std::function<void(Block*)> annotateAndRemoveProfilingNodes = [annotateAndRemoveProfilingNodes, allow_overwrites](Block* block) -> void {
+static void createPropNodeForIfBlock(Block* b, Node* n,
+    ProfilingRecord* pr, TracingData& td) {
+      auto opt_pn = pr->createProfileIValueNode(n->outputs());
+      eraseAllOutputs(opt_pn);
+      insertTracingNodes(b, pr, td);
+      b->appendNode(opt_pn);
+      std::function<void(Stack&)> optional_profiler = [pr, n, b, &td](Stack& stack) {
+      std::lock_guard<std::mutex> lock(pr->mutex_);
 
-    for (auto it = block->nodes().begin(); it != block->nodes().end();) {
-      auto n = *it;
-      it++;
+        // frame_id is unused
+        int64_t frame_id = 0;
+        pop(stack, frame_id);
 
-      if (it->kind() == prim::profile) {
-        GRAPH_DEBUG("Removing prim::profile: %", it->output()->debugName());
-        it->output()->replaceAllUsesWith(it->input());
-        auto profiled_type = it->ty(attr::profiled_type)->expect<TensorType>();
-        if (profiled_type == TensorType::get()) {
-          continue;
+        for (size_t i = 0; i < b->outputs().size(); i++) {
+          // propagate a then-block or else-output to an if-output
+          // TODO: Show mapping 
+          auto nbo = td.old_to_new_.at(b->outputs()[i]);
+          td.old_to_new_[n->outputs()[i]] = nbo;
         }
-        it->input()->setType(it->ty(attr::profiled_type));
-        it.destroyCurrent();
+      };
 
-      } else {
-        for (Block* ib : it->blocks()) {
-          annotateAndRemoveProfilingNodes(ib);
-        }
+      // TODO: remove after debugging
+      opt_pn->i_(Symbol::attr("propagate"), 1);
+      opt_pn->setCallback(optional_profiler);
+    }
+
+
+static void traceLoop(Node* n, ProfilingRecord* pr, TracingData& td) {
+
+      {
+        auto opt_pn = pr->createProfileIValueNode(n->outputs());
+        eraseAllOutputs(opt_pn);    
+        opt_pn->insertBefore(n);
+        std::function<void(Stack&)> optional_profiler = [pr, n, &td](Stack& stack) {
+          std::lock_guard<std::mutex> lock(pr->mutex_);
+
+          // frame_id is unused
+          int64_t frame_id = 0;
+          pop(stack, frame_id);
+
+          LoopView lv(n);
+          for (size_t i = 0; lv.bodyCarriedInputs().size(); i++) {
+            auto bno = td.old_to_new_.at(lv.carriedInputs()[i]);
+            td.old_to_new_[lv.bodyCarriedInputs()[i]] = bno;
+          }
+        };
+
+
+        //TODO: 
+        opt_pn->i_(Symbol::attr("loop_entry"), 1);
+        opt_pn->setCallback(optional_profiler);
       }
 
+      {
+        LoopView lv(n);
+        insertTracingNodes(lv.bodyBlock(), pr, td);
 
-  }
+      }
+
+      {
+        auto opt_pn = pr->createProfileIValueNode(n->outputs());
+        eraseAllOutputs(opt_pn);
+        LoopView(n).bodyBlock()->appendNode(opt_pn);
 
 
-  auto pr = ProfilingRecord::instrumentGraph(graph);
-  Code cd(pr->profiled_graph_, "");
-  InterpreterState is{cd};
-  is.run(stack);
-  auto copy = pr->profiled_graph_->copy();
-  ProfilingRecord::removeProfileCounter(copy->block());
-  annotateAndRemoveProfilingNodes(copy->block());
+        opt_pn->i_(Symbol::attr("loop_propagate"), 1);
+        std::function<void(Stack&)> optional_profiler = [pr, n, &td](Stack& stack) {
+          std::lock_guard<std::mutex> lock(pr->mutex_);
+
+          // frame_id is unused
+          int64_t frame_id = 0;
+          pop(stack, frame_id);
+
+          LoopView lv(n);
+
+          TORCH_INTERNAL_ASSERT(lv.bodyCarriedOutputs().size() == lv.carriedOutputs().size());
+          
+          for (size_t i = 0; lv.bodyCarriedOutputs().size(); i++) {
+            auto bno = td.old_to_new_.at(lv.bodyCarriedOutputs()[i]);
+            td.old_to_new_[lv.carriedOutputs()[i]] = bno;
+          }
+
+
+        };
+
+        //TODO: 
+        opt_pn->i_(Symbol::attr("loop_exit"), 1);
+        opt_pn->setCallback(optional_profiler);
+
+      }
 }
 
-TEST(DtypeAnalysis, Basic) {
+void insertTracingNodes(
+    Block* block,
+    ProfilingRecord* pr, TracingData& td) {
+  for (auto it = block->nodes().begin(); it != block->nodes().end();) {
+    auto n = *it;
+    it++;
+
+
+    if (n->kind() == prim::If) {   
+      IfView ifv(n);
+      createPropNodeForIfBlock(ifv.thenBlock(), n, pr, td);
+      createPropNodeForIfBlock(ifv.elseBlock(), n, pr, td);
+      continue;
+    }
+
+
+    if (n->kind() == prim::Loop) {
+      traceLoop(n, pr, td);
+      continue;
+    }
+
+    TORCH_INTERNAL_ASSERT(n->blocks().empty());
+    auto opt_pn = pr->createProfileIValueNode(n->outputs());
+    eraseAllOutputs(opt_pn);    
+    opt_pn->insertAfter(n);
+
+    std::function<void(Stack&)> optional_profiler = [pr, n, &td](Stack& stack) {
+      std::lock_guard<std::mutex> lock(pr->mutex_);
+
+      // frame_id is unused
+      int64_t frame_id = 0;
+      pop(stack, frame_id);
+
+      GRAPH_DEBUG("Tracing ", getHeader(n));
+      auto tracer = traceNode(n, td);
+      auto ouputs_size = n->outputs().size();
+
+      for (size_t j = 0; j < ouputs_size; j++) {
+        auto& iiv = peek(stack, j, ouputs_size);
+        if (iiv.isTensor()) {
+          auto t = iiv.toTensor();
+          auto type = t.defined() ? tensorTypeInCurrentExecutionContext(t) : TensorType::get();
+          tracer->outputs().at(j)->setType(type);
+        }
+      }
+    };
+
+    opt_pn->setCallback(optional_profiler);
+  }
+  
+}
+
+TEST(JitTracing, Basic) {
+
+  // static const auto basic_example = R"JIT(
+  // def basic(x, y):
+  //   a = x + y
+  //   b = x * y
+  //   c = x + 1
+  //   d = a - c
+  //   e = b - c
+  //   return d + e
+  // )JIT";
+
 
   static const auto basic_example = R"JIT(
   def basic(x, y):
-    a = x + y
-    b = x * y
-    c = x + 1
-    d = a - c
-    e = b - c
-    return d + e
+
+      a = x + 1
+      b = y + 2
+      c = x + y + 3
+
+      for i in range(10):
+          a = a + b
+          # invariant
+          d = b * c
+          #
+          a = a - d
+
+      e = a + 4
+      return e
   )JIT";
 
   auto cu = compile(basic_example);
   auto& fun = cu->get_function("basic");
+
+  TracingData td;
+
   auto pr = ProfilingRecord::instrumentGraph(fun.graph());
+  
+  for (auto inp: pr->profiled_graph_->inputs()) {
+    auto ni = td.traced_graph_->addInput();
+    ni->copyMetadata(inp);
+    ni->setType(ni->type());
+    td.old_to_new_[inp] = ni;
+  }
+  ProfilingRecord::removeProfileCounter(pr->profiled_graph_->block());
+  RemoveProfilingNodes(pr->profiled_graph_);
+  insertTracingNodes(pr->profiled_graph_->block(), pr.get(), td);
+  GRAPH_DUMP("Profiling Graph:", pr->profiled_graph_);
   auto x = at::randn({2, 3}, at::kCPU);
   auto y = at::randn({2, 3}, at::kCPU);
   auto stack = createStack({x, y});
-  // introduce some profiling information
+
   Code cd(pr->profiled_graph_, "");
   InterpreterState is{cd};
   is.run(stack);
-  auto copy = pr->profiled_graph_->copy();
-  ProfilingRecord::removeProfileCounter(copy->block());
-
-
+  GRAPH_DUMP("Traced graph:", td.traced_graph_);
 }
+
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 TEST(InsertAndEliminateRedundantGuardsTest, Basic) {
