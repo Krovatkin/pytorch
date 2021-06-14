@@ -70,7 +70,9 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include "Functions.h"
 #include "torch/csrc/jit/ir/ir_views.h"
+#include "torch/csrc/jit/passes/inliner.h"
 
 using namespace torch::autograd::profiler;
 
@@ -1900,6 +1902,28 @@ static void createPropNodeForIfBlock(Block* b, Node* n,
       opt_pn->setCallback(optional_profiler);
     }
 
+static void traceLoopCounter(Node* n, ProfilingRecord* pr, TracingData& td) {
+  LoopView lv(n);
+  auto opt_pn = pr->createProfileIValueNode(lv.currentTripCount());
+  eraseAllOutputs(opt_pn);    
+  lv.bodyBlock()->prependNode(opt_pn);
+  std::function<void(Stack&)> optional_profiler = [pr, n, &td](Stack& stack) {
+    std::lock_guard<std::mutex> lock(pr->mutex_);
+    // frame_id is unused
+    int64_t frame_id = 0;
+    pop(stack, frame_id);
+    int64_t loop_counter;
+    pop(stack, loop_counter);
+    WithInsertPoint wip(td.traced_graph_->block());
+    auto lc = td.traced_graph_->insertConstant(loop_counter);
+    LoopView lv(n);
+    td.old_to_new_[lv.currentTripCount()] = lc;
+  };
+
+  // TODO: remove after debugging
+  opt_pn->i_(Symbol::attr("loop_counter"), 1);
+  opt_pn->setCallback(optional_profiler);
+}
 
 static void traceLoop(Node* n, ProfilingRecord* pr, TracingData& td) {
 
@@ -1908,6 +1932,7 @@ static void traceLoop(Node* n, ProfilingRecord* pr, TracingData& td) {
         auto opt_pn = pr->createProfileIValueNode(empty_values);
         eraseAllOutputs(opt_pn);    
         opt_pn->insertBefore(n);
+        LoopView lv(n);
         std::function<void(Stack&)> optional_profiler = [pr, n, &td](Stack& stack) {
           std::lock_guard<std::mutex> lock(pr->mutex_);
 
@@ -1916,8 +1941,8 @@ static void traceLoop(Node* n, ProfilingRecord* pr, TracingData& td) {
           pop(stack, frame_id);
 
           LoopView lv(n);
-          for (size_t i = 0; lv.bodyCarriedInputs().size(); i++) {
-            GRAPH_DEBUG("(entry) About to map ", lv.carriedInputs()[i]->debugName());
+          TORCH_INTERNAL_ASSERT(lv.bodyCarriedInputs().size() == lv.carriedInputs().size());
+          for (size_t i = 0; i < lv.bodyCarriedInputs().size(); i++) {
             auto bno = td.old_to_new_.at(lv.carriedInputs()[i]);
             td.old_to_new_[lv.bodyCarriedInputs()[i]] = bno;
             GRAPH_DEBUG("Map ", td.old_to_new_[lv.bodyCarriedInputs()[i]]->debugName(), " to ", bno->debugName());
@@ -1931,9 +1956,8 @@ static void traceLoop(Node* n, ProfilingRecord* pr, TracingData& td) {
       }
 
       {
-        LoopView lv(n);
-        insertTracingNodes(lv.bodyBlock(), pr, td);
-
+        insertTracingNodes(LoopView(n).bodyBlock(), pr, td);
+        traceLoopCounter(n, pr, td);
       }
 
       {
@@ -1953,9 +1977,7 @@ static void traceLoop(Node* n, ProfilingRecord* pr, TracingData& td) {
           LoopView lv(n);
 
           TORCH_INTERNAL_ASSERT(lv.bodyCarriedOutputs().size() == lv.carriedOutputs().size());
-          
-          for (size_t i = 0; lv.bodyCarriedOutputs().size(); i++) {
-            GRAPH_DEBUG("(entry) About to map ", lv.bodyCarriedOutputs()[i]->debugName());
+          for (size_t i = 0; i < lv.bodyCarriedOutputs().size(); i++) {
             auto bno = td.old_to_new_.at(lv.bodyCarriedOutputs()[i]);
             td.old_to_new_[lv.carriedOutputs()[i]] = bno;
             GRAPH_DEBUG("Map ", td.old_to_new_[lv.bodyCarriedOutputs()[i]]->debugName(), " to ", bno->debugName());
@@ -2007,9 +2029,9 @@ void insertTracingNodes(
       GRAPH_DEBUG("Tracing ", getHeader(n));
       auto tracer = traceNode(n, td, stack);
       auto ouputs_size = n->outputs().size();
-
+      auto iivs = pop(stack, ouputs_size);
       for (size_t j = 0; j < ouputs_size; j++) {
-        auto& iiv = peek(stack, j, ouputs_size);
+        auto& iiv = iivs[j];
         if (iiv.isTensor()) {
           auto t = iiv.toTensor();
           auto type = t.defined() ? tensorTypeInCurrentExecutionContext(t) : TensorType::get();
@@ -2021,6 +2043,72 @@ void insertTracingNodes(
     opt_pn->setCallback(optional_profiler);
   }
   
+}
+
+
+static std::shared_ptr<Graph> torchScriptTrace(std::shared_ptr<Graph> graph, Stack& stack) {
+
+  TracingData td;
+  auto pr = ProfilingRecord::instrumentGraph(graph);
+  for (auto inp: pr->profiled_graph_->inputs()) {
+    auto ni = td.traced_graph_->addInput();
+    ni->copyMetadata(inp);
+    ni->setType(ni->type());
+    td.old_to_new_[inp] = ni;
+  }
+  ProfilingRecord::removeProfileCounter(pr->profiled_graph_->block());
+  RemoveProfilingNodes(pr->profiled_graph_);
+  insertTracingNodes(pr->profiled_graph_->block(), pr.get(), td);
+  GRAPH_DUMP("Profiling Graph:", pr->profiled_graph_);
+  Code cd(pr->profiled_graph_, "");
+  InterpreterState is{cd};
+  is.run(stack);
+  for (auto out: pr->profiled_graph_->outputs()) {
+    td.traced_graph_->block()->registerOutput(td.old_to_new_.at(out));
+  }
+  GRAPH_DUMP("Traced graph:", td.traced_graph_);
+  return td.traced_graph_;
+}
+
+TEST(JitTracing, Basic2) {
+
+
+
+  Module model = torch::jit::load("test/mobilenet_v3_large.pt");
+  auto graph = model.get_method("forward").graph();
+  GRAPH_DUMP("Before Inline:", graph);
+  Inline(*graph.get());
+  EliminateDeadCode(graph);
+  GRAPH_DUMP("After Inline:", graph);
+  auto x = at::randn({1, 3, 224, 224}, at::kCPU);
+  Stack stack;
+  push(stack, model._ivalue());
+  push(stack, x);
+  auto traced = torchScriptTrace(graph, stack);
+  Tensor prof_out;
+  pop(stack, prof_out);
+
+  {
+    push(stack, model._ivalue());
+    push(stack, x);
+    Code cd(traced, "traced");
+    InterpreterState is{cd};
+    is.run(stack);
+    Tensor traced_out;
+    pop(stack, traced_out);
+    torch::allclose(prof_out, traced_out);
+  }
+
+  {
+    push(stack, model._ivalue());
+    push(stack, x);
+    Code cd(graph, "graph");
+    InterpreterState is{cd};
+    is.run(stack);
+    Tensor traced_out;
+    pop(stack, traced_out);
+    torch::allclose(prof_out, traced_out);
+  }
 }
 
 TEST(JitTracing, Basic) {
@@ -2058,7 +2146,6 @@ TEST(JitTracing, Basic) {
   auto& fun = cu->get_function("basic");
 
   TracingData td;
-
   auto pr = ProfilingRecord::instrumentGraph(fun.graph());
   
   for (auto inp: pr->profiled_graph_->inputs()) {
@@ -2078,6 +2165,9 @@ TEST(JitTracing, Basic) {
   Code cd(pr->profiled_graph_, "");
   InterpreterState is{cd};
   is.run(stack);
+  for (auto out: pr->profiled_graph_->outputs()) {
+    td.traced_graph_->block()->registerOutput(td.old_to_new_.at(out));
+  }
   GRAPH_DUMP("Traced graph:", td.traced_graph_);
 }
 

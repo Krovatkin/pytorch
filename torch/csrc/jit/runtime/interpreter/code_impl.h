@@ -571,6 +571,7 @@ struct CodeImpl {
   }
 
   void emitNode(Node* node) {
+    GRAPH_DEBUG("Processing node ", getHeader(node));
     WithCurrentNode guard(&current_node_, node);
     switch (node->kind()) {
       default:
