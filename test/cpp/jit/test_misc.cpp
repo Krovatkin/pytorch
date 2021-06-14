@@ -1835,6 +1835,7 @@ struct TracingData {
 
   std::unordered_map<Value*, Value*> old_to_new_;
   std::shared_ptr<Graph> traced_graph_ = nullptr;
+  std::unordered_set<Value*> to_constantize;
 
   TracingData () {
     traced_graph_ = std::make_shared<Graph>();
@@ -1843,7 +1844,7 @@ struct TracingData {
 };
 
 
-static Node* traceNode(Node* node, TracingData& td) {
+static Node* traceNode(Node* node, TracingData& td, Stack& stack) {
 
     GRAPH_DEBUG("Tracing node ", getHeader(node));
     auto* block = td.traced_graph_->block();
@@ -1873,7 +1874,9 @@ void insertTracingNodes(Block*, ProfilingRecord*, TracingData&);
 
 static void createPropNodeForIfBlock(Block* b, Node* n,
     ProfilingRecord* pr, TracingData& td) {
-      auto opt_pn = pr->createProfileIValueNode(n->outputs());
+
+      std::vector<Value*> empty_values {};
+      auto opt_pn = pr->createProfileIValueNode(empty_values);
       eraseAllOutputs(opt_pn);
       insertTracingNodes(b, pr, td);
       b->appendNode(opt_pn);
@@ -1886,9 +1889,9 @@ static void createPropNodeForIfBlock(Block* b, Node* n,
 
         for (size_t i = 0; i < b->outputs().size(); i++) {
           // propagate a then-block or else-output to an if-output
-          // TODO: Show mapping 
           auto nbo = td.old_to_new_.at(b->outputs()[i]);
           td.old_to_new_[n->outputs()[i]] = nbo;
+          GRAPH_DEBUG("Map ", td.old_to_new_[n->outputs()[i]]->debugName(), " to ", nbo->debugName());
         }
       };
 
@@ -1900,8 +1903,9 @@ static void createPropNodeForIfBlock(Block* b, Node* n,
 
 static void traceLoop(Node* n, ProfilingRecord* pr, TracingData& td) {
 
+      std::vector<Value*> empty_values{};
       {
-        auto opt_pn = pr->createProfileIValueNode(n->outputs());
+        auto opt_pn = pr->createProfileIValueNode(empty_values);
         eraseAllOutputs(opt_pn);    
         opt_pn->insertBefore(n);
         std::function<void(Stack&)> optional_profiler = [pr, n, &td](Stack& stack) {
@@ -1913,13 +1917,15 @@ static void traceLoop(Node* n, ProfilingRecord* pr, TracingData& td) {
 
           LoopView lv(n);
           for (size_t i = 0; lv.bodyCarriedInputs().size(); i++) {
+            GRAPH_DEBUG("(entry) About to map ", lv.carriedInputs()[i]->debugName());
             auto bno = td.old_to_new_.at(lv.carriedInputs()[i]);
             td.old_to_new_[lv.bodyCarriedInputs()[i]] = bno;
+            GRAPH_DEBUG("Map ", td.old_to_new_[lv.bodyCarriedInputs()[i]]->debugName(), " to ", bno->debugName());
           }
         };
 
 
-        //TODO: 
+        //TODO: remove after debugging
         opt_pn->i_(Symbol::attr("loop_entry"), 1);
         opt_pn->setCallback(optional_profiler);
       }
@@ -1931,7 +1937,7 @@ static void traceLoop(Node* n, ProfilingRecord* pr, TracingData& td) {
       }
 
       {
-        auto opt_pn = pr->createProfileIValueNode(n->outputs());
+        auto opt_pn = pr->createProfileIValueNode(empty_values);
         eraseAllOutputs(opt_pn);
         LoopView(n).bodyBlock()->appendNode(opt_pn);
 
@@ -1949,14 +1955,16 @@ static void traceLoop(Node* n, ProfilingRecord* pr, TracingData& td) {
           TORCH_INTERNAL_ASSERT(lv.bodyCarriedOutputs().size() == lv.carriedOutputs().size());
           
           for (size_t i = 0; lv.bodyCarriedOutputs().size(); i++) {
+            GRAPH_DEBUG("(entry) About to map ", lv.bodyCarriedOutputs()[i]->debugName());
             auto bno = td.old_to_new_.at(lv.bodyCarriedOutputs()[i]);
             td.old_to_new_[lv.carriedOutputs()[i]] = bno;
+            GRAPH_DEBUG("Map ", td.old_to_new_[lv.bodyCarriedOutputs()[i]]->debugName(), " to ", bno->debugName());
           }
 
 
         };
 
-        //TODO: 
+        //TODO: remove after debugging
         opt_pn->i_(Symbol::attr("loop_exit"), 1);
         opt_pn->setCallback(optional_profiler);
 
@@ -1970,7 +1978,7 @@ void insertTracingNodes(
     auto n = *it;
     it++;
 
-
+    GRAPH_DEBUG("Inserting trace for ", getHeader(n));
     if (n->kind() == prim::If) {   
       IfView ifv(n);
       createPropNodeForIfBlock(ifv.thenBlock(), n, pr, td);
@@ -1997,7 +2005,7 @@ void insertTracingNodes(
       pop(stack, frame_id);
 
       GRAPH_DEBUG("Tracing ", getHeader(n));
-      auto tracer = traceNode(n, td);
+      auto tracer = traceNode(n, td, stack);
       auto ouputs_size = n->outputs().size();
 
       for (size_t j = 0; j < ouputs_size; j++) {
