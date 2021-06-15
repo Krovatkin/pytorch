@@ -72,6 +72,8 @@
 #include <vector>
 #include "Functions.h"
 #include "torch/csrc/jit/ir/ir_views.h"
+#include "torch/csrc/jit/passes/freeze_module.h"
+#include "torch/csrc/jit/passes/frozen_graph_optimizations.h"
 #include "torch/csrc/jit/passes/inliner.h"
 
 using namespace torch::autograd::profiler;
@@ -2075,7 +2077,11 @@ TEST(JitTracing, Basic2) {
 
 
   Module model = torch::jit::load("test/mobilenet_v3_large.pt");
+  model.eval();
+  model = freeze_module(model);
   auto graph = model.get_method("forward").graph();
+  GRAPH_DUMP("Before OptimizeFrozenGraph:", graph);
+  OptimizeFrozenGraph(graph, true);
   GRAPH_DUMP("Before Inline:", graph);
   Inline(*graph.get());
   EliminateDeadCode(graph);
