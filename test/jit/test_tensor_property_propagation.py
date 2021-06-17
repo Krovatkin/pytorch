@@ -18,7 +18,7 @@ class TestTensorPropertyPropagation(JitTestCase):
 
         @torch.jit.script
         def foo(x, y):
-            return x // y
+            return x * y
 
         inputs = list(foo.graph.inputs())
 
@@ -45,4 +45,4 @@ class TestTensorPropertyPropagation(JitTestCase):
             print(f"After setType graph: {foo.graph}")
             torch._C._jit_pass_propagate_tensor_property_on_graph(foo.graph)
             print(f"After propagation graph: {foo.graph}")
-            FileCheck().check(f"{tensor_name_dict[result]} = aten::floor_divide").run(foo.graph)
+            FileCheck().check(f"{tensor_name_dict[result]} = aten::mul").run(foo.graph)

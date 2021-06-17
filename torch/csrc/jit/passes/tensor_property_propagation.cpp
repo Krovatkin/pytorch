@@ -8,6 +8,10 @@
 #include <torch/csrc/jit/passes/tensor_property_propagation.h>
 #include <torch/library.h>
 #include <torch/types.h>
+#include "ATen/core/boxing/KernelFunction.h"
+#include "ATen/core/ivalue.h"
+#include "Functions.h"
+#include "c10/core/DeviceType.h"
 
 namespace torch {
 namespace jit {
@@ -223,6 +227,10 @@ struct TensorPropertyPropagationPass {
     bool found = false;
     c10::optional<ScalarType> scalarType;
     switch (n->kind()) {
+      case aten::mul:
+        scalarType = promoteWithMeta(n);
+        found = true;
+        break;
       case aten::eq:
       case aten::lt:
       case aten::gt:
@@ -271,6 +279,30 @@ struct TensorPropertyPropagationPass {
       aliasDb_ = std::make_unique<AliasDb>(graph_);
     }
     return aliasDb_.get();
+  }
+
+  static c10::optional<ScalarType> promoteWithMeta(Node* n) {
+    GRAPH_DEBUG("In promoteWithMeta");
+
+    std::vector<IValue> stack;
+    for (auto inp : n->inputs()) {
+      auto st = getScalarType(inp);
+      if (!st.has_value()) {
+        return c10::nullopt;
+      }
+
+      stack.push_back(at::empty({1}, at::TensorOptions(at::kMeta).dtype(*st)));
+    }
+
+    auto op = n->getOperation();
+    op(&stack);
+
+    GRAPH_DEBUG(
+        "Node output[0]",
+        getHeader(n),
+        " gets type ",
+        c10::toString(stack.back().toTensor().scalar_type()));
+    return {stack.back().toTensor().scalar_type()};
   }
 
   // simpleTypeTransferFunction returns the type that is common among all input
